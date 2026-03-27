@@ -1,4 +1,4 @@
-use super::{BlockDevice, BLOCK_SZ};
+use super::{BLOCK_SZ, BlockDevice};
 use alloc::{collections::VecDeque, sync::Arc};
 use spin::{Lazy, Mutex};
 

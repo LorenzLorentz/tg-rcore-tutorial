@@ -65,8 +65,12 @@ impl FSManager for FileSystem {
         Some(self.root.readdir())
     }
 
-    fn link(&self, _src: &str, _dst: &str) -> isize { unimplemented!() }
-    fn unlink(&self, _path: &str) -> isize { unimplemented!() }
+    fn link(&self, _src: &str, _dst: &str) -> isize {
+        unimplemented!()
+    }
+    fn unlink(&self, _path: &str) -> isize {
+        unimplemented!()
+    }
 }
 
 /// 读取文件全部内容到 Vec<u8>
@@ -77,7 +81,9 @@ pub fn read_all(fd: Arc<FileHandle>) -> Vec<u8> {
     if let Some(inode) = &fd.inode {
         loop {
             let len = inode.read_at(offset, &mut buffer);
-            if len == 0 { break; }
+            if len == 0 {
+                break;
+            }
             offset += len;
             v.extend_from_slice(&buffer[..len]);
         }

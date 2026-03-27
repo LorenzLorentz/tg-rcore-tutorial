@@ -27,6 +27,8 @@ use alloc::collections::{BTreeMap, VecDeque};
 use core::cell::UnsafeCell;
 use tg_task_manage::{Manage, PManager, ProcId, Schedule};
 
+const BIG_STRIDE: u128 = 1u128 << 32;
+
 /// 处理器全局管理器
 ///
 /// 封装 `PManager<Process, ProcManager>`，通过 `UnsafeCell` 提供内部可变性。
@@ -109,6 +111,13 @@ impl Schedule<ProcId> for ProcManager {
 
     /// 从就绪队列头部取出下一个要执行的进程
     fn fetch(&mut self) -> Option<ProcId> {
-        self.ready_queue.pop_front()
+        let (idx, _) = self.ready_queue.iter().enumerate().min_by_key(|(_, id)| {
+            let task = self.tasks.get(id).unwrap();
+            (task.stride, id.get_usize())
+        })?;
+        let id = self.ready_queue.remove(idx).unwrap();
+        let task = self.tasks.get_mut(&id).unwrap();
+        task.stride = task.stride.wrapping_add(BIG_STRIDE / task.priority as u128);
+        Some(id)
     }
 }

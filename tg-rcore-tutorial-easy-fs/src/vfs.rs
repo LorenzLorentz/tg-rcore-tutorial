@@ -1,6 +1,6 @@
 use super::{
-    block_cache_sync_all, get_block_cache, BlockDevice, DirEntry, DiskInode, DiskInodeType,
-    EasyFileSystem, DIRENT_SZ,
+    BlockDevice, DIRENT_SZ, DirEntry, DiskInode, DiskInodeType, EasyFileSystem,
+    block_cache_sync_all, get_block_cache,
 };
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -79,6 +79,40 @@ impl Inode {
         })
     }
 
+    /// 返回当前 inode 的编号。
+    pub fn inode_id(&self) -> u32 {
+        let fs = self.fs.lock();
+        fs.get_disk_inode_id(self.block_id as u32, self.block_offset)
+    }
+
+    /// 当前 inode 是否为目录。
+    pub fn is_dir(&self) -> bool {
+        self.read_disk_inode(|disk_inode| disk_inode.is_dir())
+    }
+
+    /// 当前 inode 的硬链接数。
+    pub fn nlink(&self) -> u32 {
+        self.read_disk_inode(|disk_inode| disk_inode.nlink)
+    }
+
+    /// 增加硬链接计数。
+    pub fn inc_nlink(&self) {
+        self.modify_disk_inode(|disk_inode| {
+            disk_inode.nlink += 1;
+        });
+        block_cache_sync_all();
+    }
+
+    /// 减少硬链接计数，并返回减少后的值。
+    pub fn dec_nlink(&self) -> u32 {
+        let nlink = self.modify_disk_inode(|disk_inode| {
+            disk_inode.nlink -= 1;
+            disk_inode.nlink
+        });
+        block_cache_sync_all();
+        nlink
+    }
+
     /// Increase the size of a disk inode
     fn increase_size(
         &self,
@@ -139,6 +173,66 @@ impl Inode {
         // release efs lock automatically by compiler
     }
 
+    /// 在当前目录下追加一个现有 inode 的目录项。
+    pub fn create_hard_link(&self, name: &str, inode_id: u32) -> bool {
+        let mut fs = self.fs.lock();
+        self.modify_disk_inode(|root_inode| {
+            assert!(root_inode.is_dir());
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            self.increase_size(new_size as u32, root_inode, &mut fs);
+            let dirent = DirEntry::new(name, inode_id);
+            root_inode.write_at(
+                file_count * DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+        });
+        block_cache_sync_all();
+        true
+    }
+
+    /// 删除当前目录中的一个目录项，返回被删除的 inode 编号。
+    pub fn remove_link(&self, name: &str) -> Option<u32> {
+        let _fs = self.fs.lock();
+        let inode_id = self.modify_disk_inode(|root_inode| {
+            assert!(root_inode.is_dir());
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let mut removed_idx = None;
+            let mut removed_inode_id = 0;
+            let mut dirent = DirEntry::empty();
+            for i in 0..file_count {
+                assert_eq!(
+                    root_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                if dirent.name() == name {
+                    removed_idx = Some(i);
+                    removed_inode_id = dirent.inode_number();
+                    break;
+                }
+            }
+            let removed_idx = removed_idx?;
+            let last_idx = file_count - 1;
+            if removed_idx != last_idx {
+                let mut last = DirEntry::empty();
+                assert_eq!(
+                    root_inode.read_at(
+                        last_idx * DIRENT_SZ,
+                        last.as_bytes_mut(),
+                        &self.block_device,
+                    ),
+                    DIRENT_SZ,
+                );
+                root_inode.write_at(removed_idx * DIRENT_SZ, last.as_bytes(), &self.block_device);
+            }
+            root_inode.size -= DIRENT_SZ as u32;
+            Some(removed_inode_id)
+        });
+        block_cache_sync_all();
+        inode_id
+    }
+
     /// List inodes by id under current inode
     pub fn readdir(&self) -> Vec<String> {
         let _fs = self.fs.lock();
@@ -185,6 +279,14 @@ impl Inode {
                 fs.dealloc_data(data_block);
             }
         });
+        block_cache_sync_all();
+    }
+
+    /// 回收当前 inode 自身。
+    pub fn dealloc_inode(&self) {
+        let inode_id = self.inode_id();
+        let mut fs = self.fs.lock();
+        fs.dealloc_inode(inode_id);
         block_cache_sync_all();
     }
 }

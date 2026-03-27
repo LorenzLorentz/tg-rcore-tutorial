@@ -18,6 +18,10 @@
 use tg_kernel_context::LocalContext;
 use tg_syscall::{Caller, SyscallId};
 
+// ch3 的 TCB 数组直接分配在内核栈上，计数结构必须保持很小。
+// 练习测例只会涉及少量不同的 syscall，因此用稀疏表即可。
+const SYSCALL_HISTORY_CAPACITY: usize = 8;
+
 /// 任务控制块（Task Control Block, TCB）
 ///
 /// 每个用户程序对应一个 TCB，包含：
@@ -29,6 +33,8 @@ pub struct TaskControlBlock {
     ctx: LocalContext,
     /// 任务完成标志：true 表示已退出或被杀死
     pub finish: bool,
+    /// 当前任务各系统调用的调用次数，按 `(syscall_id + 1, count)` 稀疏存储。
+    syscall_counts: [(usize, usize); SYSCALL_HISTORY_CAPACITY],
     /// 用户栈：8 KiB（1024 个 usize = 1024 × 8 = 8192 字节）
     /// 每个任务拥有独立的栈空间，避免栈溢出影响其他任务
     stack: [usize; 1024],
@@ -54,6 +60,7 @@ impl TaskControlBlock {
     pub const ZERO: Self = Self {
         ctx: LocalContext::empty(),
         finish: false,
+        syscall_counts: [(0, 0); SYSCALL_HISTORY_CAPACITY],
         stack: [0; 1024],
     };
 
@@ -65,6 +72,7 @@ impl TaskControlBlock {
     pub fn init(&mut self, entry: usize) {
         self.stack.fill(0);
         self.finish = false;
+        self.syscall_counts.fill((0, 0));
         self.ctx = LocalContext::user(entry);
         // 栈从高地址向低地址增长，所以 sp 指向栈顶（数组末尾之后的地址）
         *self.ctx.sp_mut() = self.stack.as_ptr() as usize + core::mem::size_of_val(&self.stack);
@@ -84,11 +92,11 @@ impl TaskControlBlock {
     /// 从用户上下文中提取系统调用 ID（a7 寄存器）和参数（a0-a5 寄存器），
     /// 分发到对应的处理函数，并将返回值写回 a0 寄存器。
     pub fn handle_syscall(&mut self) -> SchedulingEvent {
-        use tg_syscall::{SyscallId as Id, SyscallResult as Ret};
         use SchedulingEvent as Event;
+        use tg_syscall::{SyscallId as Id, SyscallResult as Ret};
 
         // a7 寄存器存放 syscall ID
-        let id = self.ctx.a(7).into();
+        let id: Id = self.ctx.a(7).into();
         // a0-a5 寄存器存放系统调用参数
         let args = [
             self.ctx.a(0),
@@ -98,6 +106,21 @@ impl TaskControlBlock {
             self.ctx.a(4),
             self.ctx.a(5),
         ];
+        self.record_syscall(id.0);
+        if id == Id::TRACE {
+            let ret = match args[0] {
+                0 => unsafe { *(args[1] as *const u8) as isize },
+                1 => {
+                    unsafe { *(args[1] as *mut u8) = args[2] as u8 };
+                    0
+                }
+                2 => self.query_syscall_count(args[1]) as isize,
+                _ => -1,
+            };
+            *self.ctx.a_mut(0) = ret as _;
+            self.ctx.move_next();
+            return Event::None;
+        }
         match tg_syscall::handle(Caller { entity: 0, flow: 0 }, id, args) {
             Ret::Done(ret) => match id {
                 // exit 系统调用：返回退出事件
@@ -118,5 +141,30 @@ impl TaskControlBlock {
             // 不支持的系统调用
             Ret::Unsupported(_) => Event::UnsupportedSyscall(id),
         }
+    }
+
+    #[inline]
+    fn record_syscall(&mut self, id: usize) {
+        let key = id.saturating_add(1);
+        for (slot_id, count) in &mut self.syscall_counts {
+            if *slot_id == key {
+                *count += 1;
+                return;
+            }
+            if *slot_id == 0 {
+                *slot_id = key;
+                *count = 1;
+                return;
+            }
+        }
+    }
+
+    #[inline]
+    fn query_syscall_count(&self, id: usize) -> usize {
+        let key = id.saturating_add(1);
+        self.syscall_counts
+            .iter()
+            .find_map(|(slot_id, count)| (*slot_id == key).then_some(*count))
+            .unwrap_or(0)
     }
 }

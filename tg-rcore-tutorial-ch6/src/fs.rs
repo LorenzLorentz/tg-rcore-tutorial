@@ -83,13 +83,33 @@ impl FSManager for FileSystem {
     }
 
     /// 创建硬链接（TODO 练习题）
-    fn link(&self, _src: &str, _dst: &str) -> isize {
-        unimplemented!()
+    fn link(&self, src: &str, dst: &str) -> isize {
+        if src == dst || self.find(dst).is_some() {
+            return -1;
+        }
+        let Some(inode) = self.find(src) else {
+            return -1;
+        };
+        if !self.root.create_hard_link(dst, inode.inode_id()) {
+            return -1;
+        }
+        inode.inc_nlink();
+        0
     }
 
     /// 删除硬链接（TODO 练习题）
-    fn unlink(&self, _path: &str) -> isize {
-        unimplemented!()
+    fn unlink(&self, path: &str) -> isize {
+        let Some(inode) = self.find(path) else {
+            return -1;
+        };
+        if self.root.remove_link(path).is_none() {
+            return -1;
+        }
+        if inode.dec_nlink() == 0 {
+            inode.clear();
+            inode.dealloc_inode();
+        }
+        0
     }
 }
 

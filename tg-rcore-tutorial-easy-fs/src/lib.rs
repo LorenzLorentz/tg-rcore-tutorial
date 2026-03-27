@@ -28,5 +28,5 @@ pub use block_dev::BlockDevice;
 pub use efs::EasyFileSystem;
 pub use file::*;
 use layout::*;
-pub use pipe::{make_pipe, PipeReader, PipeWriter};
+pub use pipe::{PipeReader, PipeWriter, make_pipe};
 pub use vfs::Inode;

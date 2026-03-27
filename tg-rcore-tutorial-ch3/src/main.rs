@@ -273,12 +273,7 @@ mod impls {
     /// QEMU virt 平台的时钟频率为 12.5 MHz（10000/125 = 80 ns/tick）。
     impl Clock for SyscallContext {
         #[inline]
-        fn clock_gettime(
-            &self,
-            _caller: Caller,
-            clock_id: ClockId,
-            tp: usize,
-        ) -> isize {
+        fn clock_gettime(&self, _caller: Caller, clock_id: ClockId, tp: usize) -> isize {
             match clock_id {
                 ClockId::CLOCK_MONOTONIC => {
                     // 将 RISC-V time 寄存器的值转换为纳秒
@@ -303,13 +298,7 @@ mod impls {
     /// - 查询系统调用计数（trace_request=2）
     impl Trace for SyscallContext {
         #[inline]
-        fn trace(
-            &self,
-            _caller: Caller,
-            _trace_request: usize,
-            _id: usize,
-            _data: usize,
-        ) -> isize {
+        fn trace(&self, _caller: Caller, _trace_request: usize, _id: usize, _data: usize) -> isize {
             tg_console::log::info!("trace: not implemented");
             -1
         }

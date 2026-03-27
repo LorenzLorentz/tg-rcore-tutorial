@@ -19,19 +19,24 @@
 //! - 再看 `change_program_brk`：理解 sbrk 对页映射范围的影响；
 //! - 最后结合 `ch4/src/main.rs`：对齐“进程对象创建”和“调度执行”两条路径。
 
-use crate::{build_flags, parse_flags, Sv39, Sv39Manager};
+use crate::{Sv39, Sv39Manager, build_flags, parse_flags};
 use alloc::alloc::alloc_zeroed;
 use core::alloc::Layout;
 use tg_console::log;
-use tg_kernel_context::{foreign::ForeignContext, LocalContext};
+use tg_kernel_context::{LocalContext, foreign::ForeignContext};
 use tg_kernel_vm::{
-    page_table::{MmuMeta, VAddr, PPN, VPN},
     AddressSpace,
+    page_table::{MmuMeta, PPN, VAddr, VPN},
 };
 use xmas_elf::{
+    ElfFile,
     header::{self, HeaderPt2, Machine},
-    program, ElfFile,
+    program,
 };
+
+// ch4 启动栈只有 24 KiB，进程对象在启动路径上必须保持轻量。
+// 练习测例涉及的 syscall 种类很少，用稀疏表统计即可。
+const SYSCALL_HISTORY_CAPACITY: usize = 8;
 
 /// 进程结构体
 ///
@@ -45,6 +50,8 @@ pub struct Process {
     pub context: ForeignContext,
     /// 进程的独立地址空间
     pub address_space: AddressSpace<Sv39, Sv39Manager>,
+    /// 当前进程各系统调用的调用次数，按 `(syscall_id + 1, count)` 稀疏存储。
+    syscall_counts: [(usize, usize); SYSCALL_HISTORY_CAPACITY],
     /// 堆底地址
     pub heap_bottom: usize,
     /// 当前程序 break 位置（堆顶）
@@ -148,6 +155,7 @@ impl Process {
         Some(Self {
             context: ForeignContext { context, satp },
             address_space,
+            syscall_counts: [(0, 0); SYSCALL_HISTORY_CAPACITY],
             heap_bottom,
             program_brk: heap_bottom,
         })
@@ -186,5 +194,30 @@ impl Process {
 
         self.program_brk = new_brk;
         Some(old_brk)
+    }
+
+    #[inline]
+    pub fn record_syscall(&mut self, id: usize) {
+        let key = id.saturating_add(1);
+        for (slot_id, count) in &mut self.syscall_counts {
+            if *slot_id == key {
+                *count += 1;
+                return;
+            }
+            if *slot_id == 0 {
+                *slot_id = key;
+                *count = 1;
+                return;
+            }
+        }
+    }
+
+    #[inline]
+    pub fn query_syscall_count(&self, id: usize) -> usize {
+        let key = id.saturating_add(1);
+        self.syscall_counts
+            .iter()
+            .find_map(|(slot_id, count)| (*slot_id == key).then_some(*count))
+            .unwrap_or(0)
     }
 }

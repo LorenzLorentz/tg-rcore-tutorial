@@ -1,5 +1,6 @@
 # Build artifacts
 target/
+**/target/
 **/*.o
 **/*.a
 **/*.bin
@@ -23,6 +24,15 @@ Cargo.lock
 # Temporary files
 *.tmp
 *.log
+.cache/
+.logs/
+
+# Local toolchains and test helpers
+.cargo-home/
+.rustup-home/
+
+# Chapter-local extracted user program bundles for offline testing
+tg-rcore-tutorial-ch*/tg-rcore-tutorial-user/
 
 # compressed file for submodules 
 # bundle/submodules.tar.gz

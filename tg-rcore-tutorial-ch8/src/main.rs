@@ -62,7 +62,7 @@ extern crate tg_console;
 extern crate alloc;
 
 use crate::{
-    fs::{read_all, FS},
+    fs::{FS, read_all},
     impls::{Sv39Manager, SyscallContext},
     process::{Process, Thread},
     processor::{ProcManager, ProcessorInner, ThreadManager},
@@ -80,8 +80,8 @@ use tg_kernel_context::foreign::MultislotPortal;
 #[cfg(target_arch = "riscv64")]
 use tg_kernel_vm::page_table::Sv39;
 use tg_kernel_vm::{
-    page_table::{MmuMeta, VAddr, VmFlags, VmMeta, PPN, VPN},
     AddressSpace,
+    page_table::{MmuMeta, PPN, VAddr, VPN, VmFlags, VmMeta},
 };
 use tg_sbi;
 use tg_signal::SignalResult;
@@ -198,8 +198,8 @@ extern "C" fn rust_main() -> ! {
     tg_syscall::init_scheduling(&SyscallContext);
     tg_syscall::init_clock(&SyscallContext);
     tg_syscall::init_signal(&SyscallContext);
-    tg_syscall::init_thread(&SyscallContext);       // 本章新增：线程系统调用
-    tg_syscall::init_sync_mutex(&SyscallContext);   // 本章新增：同步原语系统调用
+    tg_syscall::init_thread(&SyscallContext); // 本章新增：线程系统调用
+    tg_syscall::init_sync_mutex(&SyscallContext); // 本章新增：同步原语系统调用
     // 步骤 8：加载 initproc（返回 Process + Thread）
     let initproc = read_all(FS.open("initproc", OpenFlags::RDONLY).unwrap());
     if let Some((process, thread)) = Process::from_elf(ElfFile::new(initproc.as_slice()).unwrap()) {
@@ -347,20 +347,19 @@ fn map_portal(space: &AddressSpace<Sv39, Sv39Manager>) {
 /// - 所有操作通过 `ProcessorInner`（PThreadManager）进行双层管理
 mod impls {
     use crate::{
-        build_flags,
-        fs::{read_all, Fd, FS},
+        PROCESSOR, Sv39, Thread, build_flags,
+        fs::{FS, Fd, read_all},
         processor::ProcessorInner,
-        Sv39, Thread, PROCESSOR,
     };
     use alloc::sync::Arc;
     use alloc::{alloc::alloc_zeroed, string::String, vec::Vec};
     use core::{alloc::Layout, ptr::NonNull};
     use spin::Mutex;
     use tg_console::log;
-    use tg_easy_fs::{make_pipe, FSManager, OpenFlags, UserBuffer};
+    use tg_easy_fs::{FSManager, OpenFlags, UserBuffer, make_pipe};
     use tg_kernel_vm::{
-        page_table::{MmuMeta, Pte, VAddr, VmFlags, VmMeta, PPN, VPN},
         PageManager,
+        page_table::{MmuMeta, PPN, Pte, VAddr, VPN, VmFlags, VmMeta},
     };
     use tg_signal::SignalNo;
     use tg_sync::{Condvar, Mutex as MutexTrait, MutexBlocking, Semaphore};
@@ -390,11 +389,17 @@ mod impls {
 
     impl PageManager<Sv39> for Sv39Manager {
         #[inline]
-        fn new_root() -> Self { Self(NonNull::new(Self::page_alloc(1)).unwrap()) }
+        fn new_root() -> Self {
+            Self(NonNull::new(Self::page_alloc(1)).unwrap())
+        }
         #[inline]
-        fn root_ppn(&self) -> PPN<Sv39> { PPN::new(self.0.as_ptr() as usize >> Sv39::PAGE_BITS) }
+        fn root_ppn(&self) -> PPN<Sv39> {
+            PPN::new(self.0.as_ptr() as usize >> Sv39::PAGE_BITS)
+        }
         #[inline]
-        fn root_ptr(&self) -> NonNull<Pte<Sv39>> { self.0 }
+        fn root_ptr(&self) -> NonNull<Pte<Sv39>> {
+            self.0
+        }
         #[inline]
         fn p_to_v<T>(&self, ppn: PPN<Sv39>) -> NonNull<T> {
             unsafe { NonNull::new_unchecked(VPN::<Sv39>::new(ppn.val()).base().as_mut_ptr()) }
@@ -404,14 +409,20 @@ mod impls {
             PPN::new(VAddr::<Sv39>::new(ptr.as_ptr() as _).floor().val())
         }
         #[inline]
-        fn check_owned(&self, pte: Pte<Sv39>) -> bool { pte.flags().contains(Self::OWNED) }
+        fn check_owned(&self, pte: Pte<Sv39>) -> bool {
+            pte.flags().contains(Self::OWNED)
+        }
         #[inline]
         fn allocate(&mut self, len: usize, flags: &mut VmFlags<Sv39>) -> NonNull<u8> {
             *flags |= Self::OWNED;
             NonNull::new(Self::page_alloc(len)).unwrap()
         }
-        fn deallocate(&mut self, _pte: Pte<Sv39>, _len: usize) -> usize { todo!() }
-        fn drop_root(&mut self) { todo!() }
+        fn deallocate(&mut self, _pte: Pte<Sv39>, _len: usize) -> usize {
+            todo!()
+        }
+        fn drop_root(&mut self) {
+            todo!()
+        }
     }
 
     // ─── 控制台 ───
@@ -420,7 +431,9 @@ mod impls {
     pub struct Console;
     impl tg_console::Console for Console {
         #[inline]
-        fn put_char(&self, c: u8) { tg_sbi::console_putchar(c); }
+        fn put_char(&self, c: u8) {
+            tg_sbi::console_putchar(c);
+        }
     }
 
     // ─── 系统调用实现 ───
@@ -441,7 +454,8 @@ mod impls {
                 if fd == STDOUT || fd == STDDEBUG {
                     print!("{}", unsafe {
                         core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                            ptr.as_ptr(), count,
+                            ptr.as_ptr(),
+                            count,
                         ))
                     });
                     count as _
@@ -451,9 +465,18 @@ mod impls {
                         let mut v: Vec<&'static mut [u8]> = Vec::new();
                         unsafe { v.push(core::slice::from_raw_parts_mut(ptr.as_ptr(), count)) };
                         file.write(UserBuffer::new(v)) as _
-                    } else { log::error!("file not writable"); -1 }
-                } else { log::error!("unsupported fd: {fd}"); -1 }
-            } else { log::error!("ptr not readable"); -1 }
+                    } else {
+                        log::error!("file not writable");
+                        -1
+                    }
+                } else {
+                    log::error!("unsupported fd: {fd}");
+                    -1
+                }
+            } else {
+                log::error!("ptr not readable");
+                -1
+            }
         }
 
         fn read(&self, _caller: Caller, fd: usize, buf: usize, count: usize) -> isize {
@@ -462,7 +485,10 @@ mod impls {
                 if fd == STDIN {
                     let mut ptr = ptr.as_ptr();
                     for _ in 0..count {
-                        unsafe { *ptr = tg_sbi::console_getchar() as u8; ptr = ptr.add(1); }
+                        unsafe {
+                            *ptr = tg_sbi::console_getchar() as u8;
+                            ptr = ptr.add(1);
+                        }
                     }
                     count as _
                 } else if let Some(file) = &current.fd_table[fd] {
@@ -471,9 +497,18 @@ mod impls {
                         let mut v: Vec<&'static mut [u8]> = Vec::new();
                         unsafe { v.push(core::slice::from_raw_parts_mut(ptr.as_ptr(), count)) };
                         file.read(UserBuffer::new(v)) as _
-                    } else { log::error!("file not readable"); -1 }
-                } else { log::error!("unsupported fd: {fd}"); -1 }
-            } else { log::error!("ptr not writeable"); -1 }
+                    } else {
+                        log::error!("file not readable");
+                        -1
+                    }
+                } else {
+                    log::error!("unsupported fd: {fd}");
+                    -1
+                }
+            } else {
+                log::error!("ptr not writeable");
+                -1
+            }
         }
 
         fn open(&self, _caller: Caller, path: usize, flags: usize) -> isize {
@@ -484,7 +519,9 @@ mod impls {
                 loop {
                     unsafe {
                         let ch = *raw_ptr;
-                        if ch == 0 { break; }
+                        if ch == 0 {
+                            break;
+                        }
                         string.push(ch as char);
                         raw_ptr = (raw_ptr as usize + 1) as *mut u8;
                     }
@@ -493,16 +530,25 @@ mod impls {
                     FS.open(string.as_str(), OpenFlags::from_bits(flags as u32).unwrap())
                 {
                     let new_fd = current.fd_table.len();
-                    current.fd_table.push(Some(Mutex::new(Fd::File((*file_handle).clone()))));
+                    current
+                        .fd_table
+                        .push(Some(Mutex::new(Fd::File((*file_handle).clone()))));
                     new_fd as isize
-                } else { -1 }
-            } else { log::error!("ptr not writeable"); -1 }
+                } else {
+                    -1
+                }
+            } else {
+                log::error!("ptr not writeable");
+                -1
+            }
         }
 
         #[inline]
         fn close(&self, _caller: Caller, fd: usize) -> isize {
             let current = PROCESSOR.get_mut().get_current_proc().unwrap();
-            if fd >= current.fd_table.len() || current.fd_table[fd].is_none() { return -1; }
+            if fd >= current.fd_table.len() || current.fd_table[fd].is_none() {
+                return -1;
+            }
             current.fd_table[fd].take();
             0
         }
@@ -513,14 +559,28 @@ mod impls {
             let (read_end, write_end) = make_pipe();
             let read_fd = current.fd_table.len();
             let write_fd = read_fd + 1;
-            if let Some(mut ptr) = current.address_space
+            if let Some(mut ptr) = current
+                .address_space
                 .translate::<usize>(VAddr::new(pipe), WRITEABLE)
-            { unsafe { *ptr.as_mut() = read_fd }; } else { return -1; }
-            if let Some(mut ptr) = current.address_space
+            {
+                unsafe { *ptr.as_mut() = read_fd };
+            } else {
+                return -1;
+            }
+            if let Some(mut ptr) = current
+                .address_space
                 .translate::<usize>(VAddr::new(pipe + core::mem::size_of::<usize>()), WRITEABLE)
-            { unsafe { *ptr.as_mut() = write_fd }; } else { return -1; }
-            current.fd_table.push(Some(Mutex::new(Fd::PipeRead(read_end))));
-            current.fd_table.push(Some(Mutex::new(Fd::PipeWrite(write_end))));
+            {
+                unsafe { *ptr.as_mut() = write_fd };
+            } else {
+                return -1;
+            }
+            current
+                .fd_table
+                .push(Some(Mutex::new(Fd::PipeRead(read_end))));
+            current
+                .fd_table
+                .push(Some(Mutex::new(Fd::PipeWrite(write_end))));
             0
         }
     }
@@ -528,7 +588,9 @@ mod impls {
     /// 进程管理系统调用
     impl Process for SyscallContext {
         #[inline]
-        fn exit(&self, _caller: Caller, exit_code: usize) -> isize { exit_code as isize }
+        fn exit(&self, _caller: Caller, exit_code: usize) -> isize {
+            exit_code as isize
+        }
 
         /// fork：创建子进程（返回 Process + Thread）
         fn fork(&self, _caller: Caller) -> isize {
@@ -549,7 +611,8 @@ mod impls {
         fn exec(&self, _caller: Caller, path: usize, count: usize) -> isize {
             const READABLE: VmFlags<Sv39> = build_flags("RV");
             let current = PROCESSOR.get_mut().get_current_proc().unwrap();
-            current.address_space
+            current
+                .address_space
                 .translate(VAddr::new(path), READABLE)
                 .map(|ptr| unsafe {
                     core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr.as_ptr(), count))
@@ -558,11 +621,17 @@ mod impls {
                 .map_or_else(
                     || {
                         log::error!("unknown app, select one in the list: ");
-                        FS.readdir("").unwrap().into_iter().for_each(|app| println!("{app}"));
+                        FS.readdir("")
+                            .unwrap()
+                            .into_iter()
+                            .for_each(|app| println!("{app}"));
                         println!();
                         -1
                     },
-                    |fd| { current.exec(ElfFile::new(&read_all(fd)).unwrap()); 0 },
+                    |fd| {
+                        current.exec(ElfFile::new(&read_all(fd)).unwrap());
+                        0
+                    },
                 )
         }
 
@@ -573,21 +642,33 @@ mod impls {
             if let Some((dead_pid, exit_code)) =
                 unsafe { (*processor).wait(ProcId::from_usize(pid as usize)) }
             {
-                if let Some(mut ptr) = current.address_space
+                if let Some(mut ptr) = current
+                    .address_space
                     .translate::<i32>(VAddr::new(exit_code_ptr), WRITABLE)
-                { unsafe { *ptr.as_mut() = exit_code as i32 }; }
+                {
+                    unsafe { *ptr.as_mut() = exit_code as i32 };
+                }
                 return dead_pid.get_usize() as isize;
-            } else { return -1; }
+            } else {
+                return -1;
+            }
         }
 
         fn getpid(&self, _caller: Caller) -> isize {
-            PROCESSOR.get_mut().get_current_proc().unwrap().pid.get_usize() as _
+            PROCESSOR
+                .get_mut()
+                .get_current_proc()
+                .unwrap()
+                .pid
+                .get_usize() as _
         }
     }
 
     impl Scheduling for SyscallContext {
         #[inline]
-        fn sched_yield(&self, _caller: Caller) -> isize { 0 }
+        fn sched_yield(&self, _caller: Caller) -> isize {
+            0
+        }
     }
 
     impl Clock for SyscallContext {
@@ -596,8 +677,12 @@ mod impls {
             const WRITABLE: VmFlags<Sv39> = build_flags("W_V");
             match clock_id {
                 ClockId::CLOCK_MONOTONIC => {
-                    if let Some(mut ptr) = PROCESSOR.get_mut().get_current_proc().unwrap()
-                        .address_space.translate(VAddr::new(tp), WRITABLE)
+                    if let Some(mut ptr) = PROCESSOR
+                        .get_mut()
+                        .get_current_proc()
+                        .unwrap()
+                        .address_space
+                        .translate(VAddr::new(tp), WRITABLE)
                     {
                         let time = riscv::register::time::read() * 10000 / 125;
                         *unsafe { ptr.as_mut() } = TimeSpec {
@@ -605,7 +690,10 @@ mod impls {
                             tv_nsec: time % 1_000_000_000,
                         };
                         0
-                    } else { log::error!("ptr not readable"); -1 }
+                    } else {
+                        log::error!("ptr not readable");
+                        -1
+                    }
                 }
                 _ => -1,
             }
@@ -615,7 +703,8 @@ mod impls {
     /// 信号系统调用（与第七章相同）
     impl Signal for SyscallContext {
         fn kill(&self, _caller: Caller, pid: isize, signum: u8) -> isize {
-            if let Some(target_task) = PROCESSOR.get_mut()
+            if let Some(target_task) = PROCESSOR
+                .get_mut()
                 .get_proc(ProcId::from_usize(pid as usize))
             {
                 if let Ok(signal_no) = SignalNo::try_from(signum) {
@@ -628,22 +717,49 @@ mod impls {
             -1
         }
 
-        fn sigaction(&self, _caller: Caller, signum: u8, action: usize, old_action: usize) -> isize {
-            if signum as usize > tg_signal::MAX_SIG { return -1; }
+        fn sigaction(
+            &self,
+            _caller: Caller,
+            signum: u8,
+            action: usize,
+            old_action: usize,
+        ) -> isize {
+            if signum as usize > tg_signal::MAX_SIG {
+                return -1;
+            }
             let current = PROCESSOR.get_mut().get_current_proc().unwrap();
             if let Ok(signal_no) = SignalNo::try_from(signum) {
-                if signal_no == SignalNo::ERR { return -1; }
+                if signal_no == SignalNo::ERR {
+                    return -1;
+                }
                 if old_action as usize != 0 {
-                    if let Some(mut ptr) = current.address_space.translate(VAddr::new(old_action), WRITEABLE) {
+                    if let Some(mut ptr) = current
+                        .address_space
+                        .translate(VAddr::new(old_action), WRITEABLE)
+                    {
                         if let Some(signal_action) = current.signal.get_action_ref(signal_no) {
                             *unsafe { ptr.as_mut() } = signal_action;
-                        } else { return -1; }
-                    } else { return -1; }
+                        } else {
+                            return -1;
+                        }
+                    } else {
+                        return -1;
+                    }
                 }
                 if action as usize != 0 {
-                    if let Some(ptr) = current.address_space.translate(VAddr::new(action), READABLE) {
-                        if !current.signal.set_action(signal_no, &unsafe { *ptr.as_ptr() }) { return -1; }
-                    } else { return -1; }
+                    if let Some(ptr) = current
+                        .address_space
+                        .translate(VAddr::new(action), READABLE)
+                    {
+                        if !current
+                            .signal
+                            .set_action(signal_no, &unsafe { *ptr.as_ptr() })
+                        {
+                            return -1;
+                        }
+                    } else {
+                        return -1;
+                    }
                 }
                 return 0;
             }
@@ -651,14 +767,26 @@ mod impls {
         }
 
         fn sigprocmask(&self, _caller: Caller, mask: usize) -> isize {
-            PROCESSOR.get_mut().get_current_proc().unwrap().signal.update_mask(mask) as isize
+            PROCESSOR
+                .get_mut()
+                .get_current_proc()
+                .unwrap()
+                .signal
+                .update_mask(mask) as isize
         }
 
         fn sigreturn(&self, _caller: Caller) -> isize {
             let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
             let current = unsafe { (*processor).get_current_proc().unwrap() };
             let current_thread = unsafe { (*processor).current().unwrap() };
-            if current.signal.sig_return(&mut current_thread.context.context) { 0 } else { -1 }
+            if current
+                .signal
+                .sig_return(&mut current_thread.context.context)
+            {
+                0
+            } else {
+                -1
+            }
         }
     }
 
@@ -676,23 +804,32 @@ mod impls {
             let addrspace = &mut current_proc.address_space;
             loop {
                 let idx = vpn.index_in(Sv39::MAX_LEVEL);
-                if !addrspace.root()[idx].is_valid() { break; }
+                if !addrspace.root()[idx].is_valid() {
+                    break;
+                }
                 vpn = VPN::<Sv39>::new(vpn.val() - 3);
             }
             // 分配 2 页用户栈
             let stack = unsafe {
                 alloc_zeroed(Layout::from_size_align_unchecked(
-                    2 << Sv39::PAGE_BITS, 1 << Sv39::PAGE_BITS,
+                    2 << Sv39::PAGE_BITS,
+                    1 << Sv39::PAGE_BITS,
                 ))
             };
-            addrspace.map_extern(vpn..vpn + 2, PPN::new(stack as usize >> Sv39::PAGE_BITS), build_flags("U_WRV"));
+            addrspace.map_extern(
+                vpn..vpn + 2,
+                PPN::new(stack as usize >> Sv39::PAGE_BITS),
+                build_flags("U_WRV"),
+            );
             let satp = (8 << 60) | addrspace.root_ppn().val();
             let mut context = tg_kernel_context::LocalContext::user(entry);
             *context.sp_mut() = (vpn + 2).base().val();
             *context.a_mut(0) = arg;
             let thread = Thread::new(satp, context);
             let tid = thread.tid;
-            unsafe { (*processor).add(tid, thread, current_proc.pid); }
+            unsafe {
+                (*processor).add(tid, thread, current_proc.pid);
+            }
             tid.get_usize() as _
         }
 
@@ -705,10 +842,14 @@ mod impls {
         fn waittid(&self, _caller: Caller, tid: usize) -> isize {
             let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
             let current_thread = unsafe { (*processor).current().unwrap() };
-            if tid == current_thread.tid.get_usize() { return -1; }
+            if tid == current_thread.tid.get_usize() {
+                return -1;
+            }
             if let Some(exit_code) = unsafe { (*processor).waittid(ThreadId::from_usize(tid)) } {
                 exit_code
-            } else { -1 }
+            } else {
+                -1
+            }
         }
     }
 
@@ -720,25 +861,38 @@ mod impls {
         /// 创建信号量（初始计数 = res_count）
         fn semaphore_create(&self, _caller: Caller, res_count: usize) -> isize {
             let current_proc = PROCESSOR.get_mut().get_current_proc().unwrap();
-            let id = if let Some(id) = current_proc.semaphore_list.iter().enumerate()
-                .find(|(_, item)| item.is_none()).map(|(id, _)| id)
+            let id = if let Some(id) = current_proc
+                .semaphore_list
+                .iter()
+                .enumerate()
+                .find(|(_, item)| item.is_none())
+                .map(|(id, _)| id)
             {
                 current_proc.semaphore_list[id] = Some(Arc::new(Semaphore::new(res_count)));
                 id
             } else {
-                current_proc.semaphore_list.push(Some(Arc::new(Semaphore::new(res_count))));
+                current_proc
+                    .semaphore_list
+                    .push(Some(Arc::new(Semaphore::new(res_count))));
                 current_proc.semaphore_list.len() - 1
             };
+            let deadlock_id = current_proc.semaphore_deadlock.register(res_count);
+            debug_assert_eq!(deadlock_id, id);
             id as isize
         }
 
         /// V 操作：释放信号量，唤醒等待线程
         fn semaphore_up(&self, _caller: Caller, sem_id: usize) -> isize {
             let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
+            let tid = unsafe { (*processor).current().unwrap().tid };
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let sem = Arc::clone(current_proc.semaphore_list[sem_id].as_ref().unwrap());
+            current_proc.semaphore_deadlock.release(tid, sem_id);
             if let Some(tid) = sem.up() {
-                unsafe { (*processor).re_enque(tid); }
+                current_proc.semaphore_deadlock.acquire(tid, sem_id);
+                unsafe {
+                    (*processor).re_enque(tid);
+                }
             }
             0
         }
@@ -750,24 +904,44 @@ mod impls {
             let tid = current.tid;
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let sem = Arc::clone(current_proc.semaphore_list[sem_id].as_ref().unwrap());
-            if !sem.down(tid) { -1 } else { 0 }
+            if current_proc.deadlock_detect_enabled
+                && current_proc.semaphore_deadlock.would_deadlock(tid, sem_id)
+            {
+                return -0xdead;
+            }
+            if !sem.down(tid) {
+                current_proc.semaphore_deadlock.block(tid, sem_id);
+                -1
+            } else {
+                current_proc.semaphore_deadlock.acquire(tid, sem_id);
+                0
+            }
         }
 
         /// 创建互斥锁（blocking=true 为阻塞锁）
         fn mutex_create(&self, _caller: Caller, blocking: bool) -> isize {
             let new_mutex: Option<Arc<dyn MutexTrait>> = if blocking {
                 Some(Arc::new(MutexBlocking::new()))
-            } else { None };
+            } else {
+                None
+            };
             let current_proc = PROCESSOR.get_mut().get_current_proc().unwrap();
-            if let Some(id) = current_proc.mutex_list.iter().enumerate()
-                .find(|(_, item)| item.is_none()).map(|(id, _)| id)
+            let id = if let Some(id) = current_proc
+                .mutex_list
+                .iter()
+                .enumerate()
+                .find(|(_, item)| item.is_none())
+                .map(|(id, _)| id)
             {
                 current_proc.mutex_list[id] = new_mutex;
-                id as isize
+                id
             } else {
                 current_proc.mutex_list.push(new_mutex);
-                current_proc.mutex_list.len() as isize - 1
-            }
+                current_proc.mutex_list.len() - 1
+            };
+            let deadlock_id = current_proc.mutex_deadlock.register();
+            debug_assert_eq!(deadlock_id, id);
+            id as isize
         }
 
         /// 解锁，唤醒等待线程
@@ -775,8 +949,12 @@ mod impls {
             let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let mutex = Arc::clone(current_proc.mutex_list[mutex_id].as_ref().unwrap());
-            if let Some(tid) = mutex.unlock() {
-                unsafe { (*processor).re_enque(tid); }
+            let waking_tid = mutex.unlock();
+            current_proc.mutex_deadlock.unlock(mutex_id, waking_tid);
+            if let Some(tid) = waking_tid {
+                unsafe {
+                    (*processor).re_enque(tid);
+                }
             }
             0
         }
@@ -788,19 +966,36 @@ mod impls {
             let tid = current.tid;
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let mutex = Arc::clone(current_proc.mutex_list[mutex_id].as_ref().unwrap());
-            if !mutex.lock(tid) { -1 } else { 0 }
+            if current_proc.deadlock_detect_enabled
+                && current_proc.mutex_deadlock.would_deadlock(tid, mutex_id)
+            {
+                return -0xdead;
+            }
+            if !mutex.lock(tid) {
+                current_proc.mutex_deadlock.block(tid, mutex_id);
+                -1
+            } else {
+                current_proc.mutex_deadlock.lock_success(tid, mutex_id);
+                0
+            }
         }
 
         /// 创建条件变量
         fn condvar_create(&self, _caller: Caller, _arg: usize) -> isize {
             let current_proc = PROCESSOR.get_mut().get_current_proc().unwrap();
-            let id = if let Some(id) = current_proc.condvar_list.iter().enumerate()
-                .find(|(_, item)| item.is_none()).map(|(id, _)| id)
+            let id = if let Some(id) = current_proc
+                .condvar_list
+                .iter()
+                .enumerate()
+                .find(|(_, item)| item.is_none())
+                .map(|(id, _)| id)
             {
                 current_proc.condvar_list[id] = Some(Arc::new(Condvar::new()));
                 id
             } else {
-                current_proc.condvar_list.push(Some(Arc::new(Condvar::new())));
+                current_proc
+                    .condvar_list
+                    .push(Some(Arc::new(Condvar::new())));
                 current_proc.condvar_list.len() - 1
             };
             id as isize
@@ -812,7 +1007,9 @@ mod impls {
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let condvar = Arc::clone(current_proc.condvar_list[condvar_id].as_ref().unwrap());
             if let Some(tid) = condvar.signal() {
-                unsafe { (*processor).re_enque(tid); }
+                unsafe {
+                    (*processor).re_enque(tid);
+                }
             }
             0
         }
@@ -827,15 +1024,27 @@ mod impls {
             let mutex = Arc::clone(current_proc.mutex_list[mutex_id].as_ref().unwrap());
             let (flag, waking_tid) = condvar.wait_with_mutex(tid, mutex);
             if let Some(waking_tid) = waking_tid {
-                unsafe { (*processor).re_enque(waking_tid); }
+                unsafe {
+                    (*processor).re_enque(waking_tid);
+                }
             }
             if !flag { -1 } else { 0 }
         }
 
         /// 死锁检测（TODO 练习题）
         fn enable_deadlock_detect(&self, _caller: Caller, is_enable: i32) -> isize {
-            tg_console::log::info!("enable_deadlock_detect: is_enable = {is_enable}, not implemented");
-            -1
+            let current_proc = PROCESSOR.get_mut().get_current_proc().unwrap();
+            match is_enable {
+                0 => {
+                    current_proc.deadlock_detect_enabled = false;
+                    0
+                }
+                1 => {
+                    current_proc.deadlock_detect_enabled = true;
+                    0
+                }
+                _ => -1,
+            }
         }
     }
 }
@@ -854,17 +1063,27 @@ mod stub {
         const LEVEL_BITS: &'static [usize] = &[9, 9, 9];
         const PPN_POS: usize = 10;
         #[inline]
-        fn is_leaf(value: usize) -> bool { value & 0b1110 != 0 }
+        fn is_leaf(value: usize) -> bool {
+            value & 0b1110 != 0
+        }
     }
     /// 构建 VmFlags 占位
-    pub const fn build_flags(_s: &str) -> VmFlags<Sv39> { unsafe { VmFlags::from_raw(0) } }
+    pub const fn build_flags(_s: &str) -> VmFlags<Sv39> {
+        unsafe { VmFlags::from_raw(0) }
+    }
     /// 解析 VmFlags 占位
-    pub fn parse_flags(_s: &str) -> Result<VmFlags<Sv39>, ()> { Ok(unsafe { VmFlags::from_raw(0) }) }
+    pub fn parse_flags(_s: &str) -> Result<VmFlags<Sv39>, ()> {
+        Ok(unsafe { VmFlags::from_raw(0) })
+    }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn main() -> i32 { 0 }
+    pub extern "C" fn main() -> i32 {
+        0
+    }
     #[unsafe(no_mangle)]
-    pub extern "C" fn __libc_start_main() -> i32 { 0 }
+    pub extern "C" fn __libc_start_main() -> i32 {
+        0
+    }
     #[unsafe(no_mangle)]
     pub extern "C" fn rust_eh_personality() {}
 }

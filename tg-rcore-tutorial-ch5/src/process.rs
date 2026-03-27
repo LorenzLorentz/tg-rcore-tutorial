@@ -20,18 +20,19 @@
 //! - 再看 `fork`：重点理解地址空间深拷贝与上下文复制；
 //! - 最后看 `exec`：对比“保留 PID、替换执行映像”的设计含义。
 
-use crate::{build_flags, map_portal, parse_flags, Sv39, Sv39Manager};
+use crate::{Sv39, Sv39Manager, build_flags, map_portal, parse_flags};
 use alloc::alloc::alloc_zeroed;
 use core::alloc::Layout;
-use tg_kernel_context::{foreign::ForeignContext, LocalContext};
+use tg_kernel_context::{LocalContext, foreign::ForeignContext};
 use tg_kernel_vm::{
-    page_table::{MmuMeta, VAddr, PPN, VPN},
     AddressSpace,
+    page_table::{MmuMeta, PPN, VAddr, VPN},
 };
 use tg_task_manage::ProcId;
 use xmas_elf::{
+    ElfFile,
     header::{self, HeaderPt2, Machine},
-    program, ElfFile,
+    program,
 };
 
 /// 进程结构体
@@ -41,6 +42,10 @@ use xmas_elf::{
 pub struct Process {
     /// 进程标识符（PID），创建后不可变
     pub pid: ProcId,
+    /// 当前 stride 值。
+    pub stride: u128,
+    /// 当前优先级。
+    pub priority: isize,
     /// 用户态上下文，包含 satp 和通用寄存器
     /// ForeignContext 支持跨地址空间的 Trap 切换（通过异界传送门）
     pub context: ForeignContext,
@@ -85,6 +90,8 @@ impl Process {
         let foreign_ctx = ForeignContext { context, satp };
         Some(Self {
             pid,
+            stride: 0,
+            priority: 16,
             context: foreign_ctx,
             address_space,
             heap_bottom: self.heap_bottom,
@@ -125,8 +132,8 @@ impl Process {
                 continue;
             }
 
-            let off_file = program.offset() as usize;     // 段在文件中的偏移
-            let len_file = program.file_size() as usize;  // 文件中的数据长度
+            let off_file = program.offset() as usize; // 段在文件中的偏移
+            let len_file = program.file_size() as usize; // 文件中的数据长度
             let off_mem = program.virtual_addr() as usize; // 虚拟地址起始
             let end_mem = off_mem + program.mem_size() as usize; // 虚拟地址结束
             assert_eq!(off_file & PAGE_MASK, off_mem & PAGE_MASK);
@@ -188,6 +195,8 @@ impl Process {
 
         Some(Self {
             pid: ProcId::new(),
+            stride: 0,
+            priority: 16,
             context: ForeignContext { context, satp },
             address_space,
             heap_bottom,

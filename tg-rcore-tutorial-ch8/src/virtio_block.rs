@@ -10,7 +10,7 @@
 //! - 本文件在三章里保持稳定，目的是让你把注意力集中到并发语义变化；
 //! - 建议重点复盘 `virt_to_phys`：它是“驱动可在分页内核中工作”的关键桥接点。
 
-use crate::{build_flags, Sv39, KERNEL_SPACE};
+use crate::{KERNEL_SPACE, Sv39, build_flags};
 use alloc::{
     alloc::{alloc_zeroed, dealloc},
     sync::Arc,
@@ -46,11 +46,15 @@ unsafe impl Sync for VirtIOBlock {}
 
 impl BlockDevice for VirtIOBlock {
     fn read_block(&self, block_id: usize, buf: &mut [u8]) {
-        self.0.lock().read_block(block_id, buf)
+        self.0
+            .lock()
+            .read_block(block_id, buf)
             .expect("Error when reading VirtIOBlk");
     }
     fn write_block(&self, block_id: usize, buf: &[u8]) {
-        self.0.lock().write_block(block_id, buf)
+        self.0
+            .lock()
+            .write_block(block_id, buf)
             .expect("Error when writing VirtIOBlk");
     }
 }
@@ -63,7 +67,8 @@ impl Hal for VirtioHal {
     fn dma_alloc(pages: usize) -> usize {
         unsafe {
             alloc_zeroed(Layout::from_size_align_unchecked(
-                pages << Sv39::PAGE_BITS, 1 << Sv39::PAGE_BITS,
+                pages << Sv39::PAGE_BITS,
+                1 << Sv39::PAGE_BITS,
             )) as _
         }
     }
@@ -80,7 +85,9 @@ impl Hal for VirtioHal {
     }
 
     /// 物理地址转虚拟地址（恒等映射）
-    fn phys_to_virt(paddr: usize) -> usize { paddr }
+    fn phys_to_virt(paddr: usize) -> usize {
+        paddr
+    }
 
     /// 虚拟地址转物理地址
     fn virt_to_phys(vaddr: usize) -> usize {

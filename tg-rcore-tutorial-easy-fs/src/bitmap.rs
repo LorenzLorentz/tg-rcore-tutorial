@@ -1,4 +1,4 @@
-use super::{get_block_cache, BlockDevice, BLOCK_SZ};
+use super::{BLOCK_SZ, BlockDevice, get_block_cache};
 use alloc::sync::Arc;
 
 // 教程说明：

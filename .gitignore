@@ -33,6 +33,7 @@ Cargo.lock
 
 # Chapter-local extracted user program bundles for offline testing
 tg-rcore-tutorial-ch*/tg-rcore-tutorial-user/
+tg-rcore-tutorial-t2l*/tg-rcore-tutorial-user/
 
 # compressed file for submodules 
 # bundle/submodules.tar.gz

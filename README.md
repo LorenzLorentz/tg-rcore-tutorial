@@ -7,11 +7,12 @@
 
 本实验教程的目标：学生与AI充分合作，按章节学习操作系统内核的逐步演进过程，或按组件视角学习操作系统内核的总体架构和功能组成，从而能够把操作系统的原理概率与设计实现关联起来，并掌握操作系统的系统架构级设计能力。  
 
-本实验教程的任务：请看`rcore-tutorial-ch[1-8]`中的`README.md`中的`## 练习任务`小节的内容，了解并完成基础级和扩展级的任务要求。对于能力强的同学，请看`docs\challenges.md`的内容，了解并完成挑战级的任务要求。
+本实验教程的任务：请看`rcore-tutorial-ch[1-8]`中的`README.md`中的`## 练习任务`小节的内容，了解并完成基础级和扩展级的任务要求。对于能力强的同学，请看`docs\challenges.md`的内容，了解并完成挑战级的任务要求。若希望继续做“可插拔调度器”和“公平同步互斥”两类扩展设计实验，可额外阅读 `tg-rcore-tutorial-t2l4` 与 `tg-rcore-tutorial-t2l5` 的 README。
 
 汇总仓库包含：
 
 - `tg-rcore-tutorial-ch1~tg-rcore-tutorial-ch8`：tg-rcore-tutorial-ch[1-8] 8 个渐进章节（每章是一个可独立运行的内核 crate + 指导文档）
+- `tg-rcore-tutorial-t2l4` / `tg-rcore-tutorial-t2l5`：基于 `ch8` 继续分叉的两个本地扩展目录，分别面向“可插拔调度算法实验套件”和“公平同步互斥实验”
 - `tg-*`：可复用内核组件 crate（内存、虚存、上下文、同步、信号、文件系统等）
 - `tg-rcore-tutorial-user`：用户态测试程序集合
 - `tg-rcore-tutorial-checker`：测试输出检测工具
@@ -182,6 +183,8 @@ cargo build --features exercise
 
 5 个常见练习章：`tg-rcore-tutorial-ch[34568]`。
 
+额外的 2 个本地扩展设计目录：`tg-rcore-tutorial-t2l4`、`tg-rcore-tutorial-t2l5`。
+
 <a id="chapters-source-nav-map"></a>
 
 ### 3.1 tg-rcore-tutorial-ch[1-8] 源码导航总表（配套注释版）
@@ -198,6 +201,17 @@ cargo build --features exercise
 | [`ch6`](tg-rcore-tutorial-ch6/README.md#source-nav) | `src/virtio_block.rs` -> `src/fs.rs` -> `src/main.rs` | 块设备到文件系统，再到 fd 系统调用 |
 | [`ch7`](tg-rcore-tutorial-ch7/README.md#source-nav) | `src/fs.rs` -> `src/process.rs` -> `src/main.rs` | 管道统一 fd 抽象 + 信号处理 |
 | [`ch8`](tg-rcore-tutorial-ch8/README.md#source-nav) | `src/process.rs` -> `src/processor.rs` -> `src/main.rs` | 线程化调度 + 同步原语阻塞/唤醒 |
+
+<a id="extended-chapters-nav"></a>
+
+### 3.2 本地扩展章节导航
+
+下面两个章节不是原始 `ch1~ch8` 基础链路的一部分，而是基于 `ch8` 复制出来的进一步设计实验脚手架。
+
+| 章节 | 基础起点 | 建议先读的源码文件（顺序） | 关注主线 |
+|---|---|---|---|
+| [`tg-rcore-tutorial-t2l4`](tg-rcore-tutorial-t2l4/README.md#source-nav) | `tg-rcore-tutorial-ch8` | `src/processor.rs` -> `src/process.rs` -> `src/main.rs` | 把单一调度器改造成“策略插件 + 统一观测” |
+| [`tg-rcore-tutorial-t2l5`](tg-rcore-tutorial-t2l5/README.md#source-nav) | `tg-rcore-tutorial-ch8` | `src/process.rs` -> `src/main.rs` -> `../tg-rcore-tutorial-sync` | 把“能跑”的同步原语推进到“公平、可测、可分析” |
 
 ## 4. 常用开发与测试流程
 

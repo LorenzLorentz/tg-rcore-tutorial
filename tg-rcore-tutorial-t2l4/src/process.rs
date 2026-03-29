@@ -247,6 +247,149 @@ impl MutexDeadlockState {
     }
 }
 
+/// 线程级调度实体状态。
+///
+/// 该状态与 `Thread` 绑定，而不是和 `Process` 绑定：
+/// 阻塞、唤醒、交互延迟和就绪等待都发生在线程层。
+pub struct SchedEntity {
+    /// 创建时间戳。
+    pub created_at_ns: u64,
+    /// 最近一次进入 ready 队列的时间。
+    pub ready_since_ns: Option<u64>,
+    /// 第一次获得 CPU 的时间。
+    pub first_run_at_ns: Option<u64>,
+    /// 结束时间戳。
+    pub finished_at_ns: Option<u64>,
+    /// 累计运行时间。
+    pub total_runtime_ns: u64,
+    /// 累计 ready 等待时间。
+    pub total_wait_ns: u64,
+    /// 最近一次唤醒时间。
+    pub last_wakeup_at_ns: Option<u64>,
+    /// 交互延迟样本（wakeup -> next run）。
+    pub interaction_latencies_ns: Vec<u64>,
+    /// 饥饿事件次数。
+    pub starvation_events: usize,
+    /// 被调度次数。
+    pub dispatch_count: usize,
+    /// 运行片段次数。
+    pub run_slices: usize,
+    /// 上一次完整 CPU burst。
+    pub last_burst_ns: u64,
+    /// 预测的下一次 CPU burst（SJF 使用指数平均）。
+    pub burst_estimate_ns: u64,
+    /// 简化 CFS 的虚拟运行时间。
+    pub vruntime_ns: u64,
+    /// 简化 CFS 的权重。
+    pub weight: u64,
+    /// MLFQ 当前队列层级。
+    pub queue_level: usize,
+    /// 当前队列已使用的 tick 数。
+    pub tick_budget_used: u32,
+}
+
+impl SchedEntity {
+    /// 默认 burst 估计。
+    pub const DEFAULT_BURST_NS: u64 = 300_000;
+    /// CFS 默认权重。
+    pub const DEFAULT_WEIGHT: u64 = 1024;
+
+    /// 创建空调度实体。
+    pub fn new() -> Self {
+        Self {
+            created_at_ns: 0,
+            ready_since_ns: None,
+            first_run_at_ns: None,
+            finished_at_ns: None,
+            total_runtime_ns: 0,
+            total_wait_ns: 0,
+            last_wakeup_at_ns: None,
+            interaction_latencies_ns: Vec::new(),
+            starvation_events: 0,
+            dispatch_count: 0,
+            run_slices: 0,
+            last_burst_ns: 0,
+            burst_estimate_ns: Self::DEFAULT_BURST_NS,
+            vruntime_ns: 0,
+            weight: Self::DEFAULT_WEIGHT,
+            queue_level: 0,
+            tick_budget_used: 0,
+        }
+    }
+
+    /// 在线程被真正纳入实验时调用。
+    pub fn on_created(&mut self, now_ns: u64) {
+        self.created_at_ns = now_ns;
+        self.ready_since_ns = Some(now_ns);
+        self.first_run_at_ns = None;
+        self.finished_at_ns = None;
+        self.total_runtime_ns = 0;
+        self.total_wait_ns = 0;
+        self.last_wakeup_at_ns = None;
+        self.interaction_latencies_ns.clear();
+        self.starvation_events = 0;
+        self.dispatch_count = 0;
+        self.run_slices = 0;
+        self.last_burst_ns = 0;
+        self.burst_estimate_ns = Self::DEFAULT_BURST_NS;
+        self.vruntime_ns = 0;
+        self.weight = Self::DEFAULT_WEIGHT;
+        self.queue_level = 0;
+        self.tick_budget_used = 0;
+    }
+
+    /// 进入 ready 队列。
+    pub fn on_ready(&mut self, now_ns: u64) {
+        self.ready_since_ns = Some(now_ns);
+    }
+
+    /// 被唤醒并重新进入 ready 队列。
+    pub fn on_wakeup(&mut self, now_ns: u64) {
+        self.last_wakeup_at_ns = Some(now_ns);
+        self.on_ready(now_ns);
+    }
+
+    /// 获得 CPU。
+    pub fn on_dispatch(&mut self, now_ns: u64, starvation_threshold_ns: u64) {
+        self.dispatch_count += 1;
+        if self.first_run_at_ns.is_none() {
+            self.first_run_at_ns = Some(now_ns);
+        }
+        if let Some(ready_since_ns) = self.ready_since_ns.take() {
+            let wait_ns = now_ns.saturating_sub(ready_since_ns);
+            self.total_wait_ns = self.total_wait_ns.saturating_add(wait_ns);
+            if wait_ns >= starvation_threshold_ns {
+                self.starvation_events += 1;
+            }
+            if let Some(wakeup_at_ns) = self.last_wakeup_at_ns.take() {
+                self.interaction_latencies_ns
+                    .push(now_ns.saturating_sub(wakeup_at_ns));
+            }
+        }
+    }
+
+    /// 完成一个运行片段。
+    pub fn record_run(&mut self, burst_ns: u64) {
+        self.run_slices += 1;
+        self.total_runtime_ns = self.total_runtime_ns.saturating_add(burst_ns);
+        self.last_burst_ns = burst_ns;
+        self.burst_estimate_ns =
+            (self.burst_estimate_ns.saturating_add(burst_ns.max(1))) / 2;
+    }
+
+    /// 线程退出。
+    pub fn on_finish(&mut self, now_ns: u64) {
+        self.finished_at_ns = Some(now_ns);
+    }
+
+    /// 周转时间。
+    pub fn turnaround_ns(&self) -> u64 {
+        self.finished_at_ns
+            .unwrap_or(self.created_at_ns)
+            .saturating_sub(self.created_at_ns)
+    }
+}
+
 /// 线程（执行单元）
 ///
 /// 每个线程有独立的 TID 和上下文（寄存器状态、satp）。
@@ -256,6 +399,8 @@ pub struct Thread {
     pub tid: ThreadId,
     /// 执行上下文（包含 LocalContext + satp）
     pub context: ForeignContext,
+    /// 线程级调度状态。
+    pub sched: SchedEntity,
 }
 
 impl Thread {
@@ -264,6 +409,7 @@ impl Thread {
         Self {
             tid: ThreadId::new(),
             context: ForeignContext { context, satp },
+            sched: SchedEntity::new(),
         }
     }
 }
@@ -305,7 +451,9 @@ impl Process {
         let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
         unsafe {
             let pthreads = (*processor).get_thread(self.pid).unwrap();
-            (*processor).get_task(pthreads[0]).unwrap().context = thread.context;
+            let main_thread = (*processor).get_task(pthreads[0]).unwrap();
+            main_thread.context = thread.context;
+            main_thread.sched = SchedEntity::new();
         }
     }
 

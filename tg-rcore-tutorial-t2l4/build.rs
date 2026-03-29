@@ -21,6 +21,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TG_USER_LOCAL_DIR");
     println!("cargo:rerun-if-env-changed=TG_SKIP_USER_APPS");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_EXERCISE");
+    println!("cargo:rerun-if-env-changed=T2L4_SCENARIO");
+    println!("cargo:rerun-if-env-changed=T2L4_SCHED");
+    println!("cargo:rerun-if-env-changed=T2L4_TRACE");
 
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
 
@@ -85,11 +88,7 @@ fn build_apps_and_pack_fs() {
     let mut cases_map: HashMap<String, Cases> =
         toml::from_str(&cfg).unwrap_or_else(|err| panic!("failed to parse cases.toml: {err}"));
 
-    let case_key = if env::var("CARGO_FEATURE_EXERCISE").is_ok() {
-        "ch8_exercise"
-    } else {
-        "ch8"
-    };
+    let case_key = "t2l4";
     let cases = cases_map.remove(case_key).unwrap_or_default();
     let base = cases.base.unwrap_or(0);
     let step = cases.step.unwrap_or(0);
@@ -217,6 +216,14 @@ fn ensure_tg_user() -> PathBuf {
         .expect("TG_USER_VERSION not set; add it to .cargo/config.toml [env]");
 
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let workspace_user_dir = manifest_dir
+        .parent()
+        .unwrap()
+        .join("tg-rcore-tutorial-user");
+    if workspace_user_dir.join("Cargo.toml").exists() {
+        return workspace_user_dir;
+    }
+
     let tg_user_dir = manifest_dir.join(&local_dir_name);
 
     // 本地缓存目录已存在则直接使用

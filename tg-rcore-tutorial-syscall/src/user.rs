@@ -360,10 +360,12 @@ pub mod native {
     pub unsafe fn syscall0(id: SyscallId) -> isize {
         let ret: isize;
         // SAFETY: ecall 指令触发系统调用，由内核处理
-        asm!("ecall",
-            in("a7") id.0,
-            out("a0") ret,
-        );
+        unsafe {
+            asm!("ecall",
+                in("a7") id.0,
+                out("a0") ret,
+            );
+        }
         ret
     }
 
@@ -376,10 +378,12 @@ pub mod native {
     pub unsafe fn syscall1(id: SyscallId, a0: usize) -> isize {
         let ret: isize;
         // SAFETY: ecall 指令触发系统调用，由内核处理
-        asm!("ecall",
-            inlateout("a0") a0 => ret,
-            in("a7") id.0,
-        );
+        unsafe {
+            asm!("ecall",
+                inlateout("a0") a0 => ret,
+                in("a7") id.0,
+            );
+        }
         ret
     }
 
@@ -392,11 +396,13 @@ pub mod native {
     pub unsafe fn syscall2(id: SyscallId, a0: usize, a1: usize) -> isize {
         let ret: isize;
         // SAFETY: ecall 指令触发系统调用，由内核处理
-        asm!("ecall",
-            in("a7") id.0,
-            inlateout("a0") a0 => ret,
-            in("a1") a1,
-        );
+        unsafe {
+            asm!("ecall",
+                in("a7") id.0,
+                inlateout("a0") a0 => ret,
+                in("a1") a1,
+            );
+        }
         ret
     }
 
@@ -409,12 +415,14 @@ pub mod native {
     pub unsafe fn syscall3(id: SyscallId, a0: usize, a1: usize, a2: usize) -> isize {
         let ret: isize;
         // SAFETY: ecall 指令触发系统调用，由内核处理
-        asm!("ecall",
-            in("a7") id.0,
-            inlateout("a0") a0 => ret,
-            in("a1") a1,
-            in("a2") a2,
-        );
+        unsafe {
+            asm!("ecall",
+                in("a7") id.0,
+                inlateout("a0") a0 => ret,
+                in("a1") a1,
+                in("a2") a2,
+            );
+        }
         ret
     }
 
@@ -427,13 +435,15 @@ pub mod native {
     pub unsafe fn syscall4(id: SyscallId, a0: usize, a1: usize, a2: usize, a3: usize) -> isize {
         let ret: isize;
         // SAFETY: ecall 指令触发系统调用，由内核处理
-        asm!("ecall",
-            in("a7") id.0,
-            inlateout("a0") a0 => ret,
-            in("a1") a1,
-            in("a2") a2,
-            in("a3") a3,
-        );
+        unsafe {
+            asm!("ecall",
+                in("a7") id.0,
+                inlateout("a0") a0 => ret,
+                in("a1") a1,
+                in("a2") a2,
+                in("a3") a3,
+            );
+        }
         ret
     }
 
@@ -453,14 +463,16 @@ pub mod native {
     ) -> isize {
         let ret: isize;
         // SAFETY: ecall 指令触发系统调用，由内核处理
-        asm!("ecall",
-            in("a7") id.0,
-            inlateout("a0") a0 => ret,
-            in("a1") a1,
-            in("a2") a2,
-            in("a3") a3,
-            in("a4") a4,
-        );
+        unsafe {
+            asm!("ecall",
+                in("a7") id.0,
+                inlateout("a0") a0 => ret,
+                in("a1") a1,
+                in("a2") a2,
+                in("a3") a3,
+                in("a4") a4,
+            );
+        }
         ret
     }
 
@@ -481,15 +493,17 @@ pub mod native {
     ) -> isize {
         let ret: isize;
         // SAFETY: ecall 指令触发系统调用，由内核处理
-        asm!("ecall",
-            in("a7") id.0,
-            inlateout("a0") a0 => ret,
-            in("a1") a1,
-            in("a2") a2,
-            in("a3") a3,
-            in("a4") a4,
-            in("a5") a5,
-        );
+        unsafe {
+            asm!("ecall",
+                in("a7") id.0,
+                inlateout("a0") a0 => ret,
+                in("a1") a1,
+                in("a2") a2,
+                in("a3") a3,
+                in("a4") a4,
+                in("a5") a5,
+            );
+        }
         ret
     }
 }

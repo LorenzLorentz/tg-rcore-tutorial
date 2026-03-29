@@ -65,7 +65,7 @@ use crate::{
     fs::{FS, read_all},
     impls::{Sv39Manager, SyscallContext},
     process::{Process, Thread},
-    processor::{ProcManager, ProcessorInner, ThreadManager},
+    processor::ProcessorInner,
 };
 use alloc::alloc::alloc;
 use core::{alloc::Layout, cell::UnsafeCell, mem::MaybeUninit};
@@ -160,6 +160,8 @@ static KERNEL_SPACE: KernelSpace = KernelSpace::new();
 /// VirtIO MMIO 设备地址范围
 pub const MMIO: &[(usize, usize)] = &[(0x1000_1000, 0x00_1000)];
 
+const LAB_TICK_REQUEST: usize = 100;
+
 /// 内核主函数
 ///
 /// 与第七章相比：
@@ -200,12 +202,11 @@ extern "C" fn rust_main() -> ! {
     tg_syscall::init_signal(&SyscallContext);
     tg_syscall::init_thread(&SyscallContext); // 本章新增：线程系统调用
     tg_syscall::init_sync_mutex(&SyscallContext); // 本章新增：同步原语系统调用
+    tg_syscall::init_trace(&SyscallContext); // t2l4 新增：虚拟 tick / trace 钩子
     // 步骤 8：加载 initproc（返回 Process + Thread）
     let initproc = read_all(FS.open("initproc", OpenFlags::RDONLY).unwrap());
     if let Some((process, thread)) = Process::from_elf(ElfFile::new(initproc.as_slice()).unwrap()) {
-        // 初始化双层管理器：ProcManager（进程）+ ThreadManager（线程）
-        PROCESSOR.get_mut().set_proc_manager(ProcManager::new());
-        PROCESSOR.get_mut().set_manager(ThreadManager::new());
+        PROCESSOR.init(ProcessorInner::new());
         let (pid, tid) = (process.pid, thread.tid);
         PROCESSOR
             .get_mut()
@@ -252,6 +253,15 @@ extern "C" fn rust_main() -> ! {
                                         unsafe { (*processor).make_current_suspend() };
                                     }
                                 }
+                                Id::TRACE if args[0] == LAB_TICK_REQUEST => {
+                                    let ctx = &mut task.context.context;
+                                    *ctx.a_mut(0) = ret as _;
+                                    if unsafe { (*processor).handle_tick() } {
+                                        unsafe { (*processor).make_current_tick_suspend() };
+                                    } else {
+                                        continue;
+                                    }
+                                }
                                 _ => {
                                     let ctx = &mut task.context.context;
                                     *ctx.a_mut(0) = ret as _;
@@ -271,6 +281,7 @@ extern "C" fn rust_main() -> ! {
                 }
             }
         } else {
+            PROCESSOR.get_mut().print_report();
             println!("no task");
             break;
         }
@@ -668,6 +679,16 @@ mod impls {
         #[inline]
         fn sched_yield(&self, _caller: Caller) -> isize {
             0
+        }
+    }
+
+    impl Trace for SyscallContext {
+        #[inline]
+        fn trace(&self, _caller: Caller, trace_request: usize, _id: usize, _data: usize) -> isize {
+            match trace_request {
+                crate::LAB_TICK_REQUEST => 0,
+                _ => -1,
+            }
         }
     }
 

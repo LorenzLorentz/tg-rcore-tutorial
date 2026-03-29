@@ -295,3 +295,12 @@ cases = [
     "user_shell",
     "initproc",
 ]
+
+[t2l4]
+cases = [
+    "sched_lab_cpu",
+    "sched_lab_io",
+    "sched_lab_interactive",
+    "sched_lab_mixed",
+    "initproc",
+]

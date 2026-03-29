@@ -10,6 +10,18 @@ use user_lib::{exec, fork, wait};
 
 #[unsafe(no_mangle)]
 extern "C" fn main() -> i32 {
+    if option_env!("CHAPTER").unwrap_or("0") == "9" {
+        let target = match option_env!("T2L4_SCENARIO").unwrap_or("mixed") {
+            "cpu" => "sched_lab_cpu",
+            "io" => "sched_lab_io",
+            "interactive" => "sched_lab_interactive",
+            "mixed" => "sched_lab_mixed",
+            _ => "sched_lab_mixed",
+        };
+        exec(target);
+        return 0;
+    }
+
     if fork() == 0 {
         // 子进程执行实际目标程序，父进程负责兜底回收孤儿退出。
         let target = match option_env!("CHAPTER").unwrap_or("0") {

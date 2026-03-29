@@ -101,6 +101,29 @@ pub fn count_syscall(syscall_id: usize) -> isize {
     trace(2, syscall_id, 0)
 }
 
+/// t2l4 实验使用的虚拟 tick 请求号。
+pub const LAB_TICK_REQUEST: usize = 100;
+
+/// 主动向内核发送一个“虚拟时钟 tick”。
+///
+/// `tg-rcore-tutorial-t2l4` 会把这个请求映射到 `Scheduler::on_tick()`。
+pub fn lab_tick() -> isize {
+    trace(LAB_TICK_REQUEST, 0, 0)
+}
+
+/// 用纯计算制造一个可重复的 CPU burst。
+pub fn busy_spin(rounds: usize, seed: usize) -> usize {
+    let mut value = seed.wrapping_add(1);
+    for i in 0..rounds {
+        value = value
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223)
+            .wrapping_add(i);
+        core::hint::black_box(value);
+    }
+    value
+}
+
 /// 从管道读取数据
 /// 返回实际读取的总字节数，负数表示错误
 pub fn pipe_read(pipe_fd: usize, buffer: &mut [u8]) -> isize {

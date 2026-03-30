@@ -1,0 +1,18 @@
+[package]
+name = "wpj-tg-rcore-tutorial-gfx"
+description = "Minimal extensible framebuffer graphics component for tg-rcore-tutorial."
+version = "0.0.0"
+edition = "2024"
+authors = ["OpenAI Codex"]
+license = "GPL-3.0"
+keywords = ["rcore", "graphics", "framebuffer", "virtio", "no-std"]
+categories = ["no-std", "embedded"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[dependencies]
+virtio-drivers = "0.1.0"

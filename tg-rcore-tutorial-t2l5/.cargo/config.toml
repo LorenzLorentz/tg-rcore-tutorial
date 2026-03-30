@@ -30,6 +30,8 @@ runner = [
 # TG_USER_LOCAL_DIR: 本地缓存目录名（位于 chN/ 下）
 # TG_USER_VERSION : 目标版本号
 [env]
-TG_USER_CRATE     = "tg-rcore-tutorial-user"
+CHAPTER           = "10"
+T2L5_SCENARIO     = "t2l5_mutex_stress"
+TG_USER_CRATE     = "wpj-tg-rcore-tutorial-user"
 TG_USER_LOCAL_DIR = "tg-rcore-tutorial-user"
-TG_USER_VERSION   = "0.4.8"
+TG_USER_VERSION   = "0.0.0"

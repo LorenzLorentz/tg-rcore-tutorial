@@ -208,6 +208,16 @@ fn ensure_tg_user() -> PathBuf {
         }
     }
 
+    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let sibling_tg_user_dir = manifest_dir
+        .parent()
+        .map(|parent| parent.join("tg-rcore-tutorial-user"))
+        .unwrap_or_else(|| manifest_dir.join("tg-rcore-tutorial-user"));
+    if sibling_tg_user_dir.join("Cargo.toml").exists() {
+        ensure_workspace_table(&sibling_tg_user_dir);
+        return sibling_tg_user_dir;
+    }
+
     // 从 .cargo/config.toml [env] 读取三个配置项
     let crate_name = env::var("TG_USER_CRATE")
         .expect("TG_USER_CRATE not set; add it to .cargo/config.toml [env]");
@@ -216,7 +226,6 @@ fn ensure_tg_user() -> PathBuf {
     let version = env::var("TG_USER_VERSION")
         .expect("TG_USER_VERSION not set; add it to .cargo/config.toml [env]");
 
-    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let tg_user_dir = manifest_dir.join(&local_dir_name);
 
     // 本地缓存目录已存在则直接使用

@@ -228,6 +228,7 @@ fn ensure_tg_user() -> PathBuf {
 
     // 当前仓库通常把 tg-rcore-tutorial-user 放在兄弟目录，优先复用它。
     if sibling_tg_user_dir.join("Cargo.toml").exists() {
+        ensure_workspace_table(&sibling_tg_user_dir);
         return sibling_tg_user_dir;
     }
 

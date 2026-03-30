@@ -221,6 +221,7 @@ fn ensure_tg_user() -> PathBuf {
         .unwrap()
         .join("tg-rcore-tutorial-user");
     if workspace_user_dir.join("Cargo.toml").exists() {
+        ensure_workspace_table(&workspace_user_dir);
         return workspace_user_dir;
     }
 

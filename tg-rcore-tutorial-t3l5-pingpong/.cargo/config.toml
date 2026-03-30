@@ -1,0 +1,19 @@
+# 默认编译目标：RISC-V 64 位裸机平台
+# 使 cargo build 自动进行交叉编译，无需每次指定 --target
+[build]
+target = "riscv64gc-unknown-none-elf"
+
+# QEMU 运行器配置
+# 通过仓库内脚本统一管理图形/串口参数。
+# 默认启动带 VirtIO-GPU 的窗口；设置 TG_PINGPONG_HEADLESS=1 可切换到无图形模式。
+[target.riscv64gc-unknown-none-elf]
+runner = ["sh", "run-qemu.sh"]
+
+# tg-user 用户态库的配置，由 build.rs 读取
+# TG_USER_CRATE   : cargo clone 时使用的 crates.io 包名
+# TG_USER_LOCAL_DIR: 本地缓存目录名（位于 chN/ 下）
+# TG_USER_VERSION : 目标版本号
+[env]
+TG_USER_CRATE     = "tg-rcore-tutorial-user"
+TG_USER_LOCAL_DIR = "tg-rcore-tutorial-user"
+TG_USER_VERSION   = "0.4.8"

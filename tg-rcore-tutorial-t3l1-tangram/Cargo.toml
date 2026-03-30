@@ -1,0 +1,20 @@
+[package]
+name = "wpj-tg-rcore-tutorial-t3l1-tangram"
+description = "Task3 Lab1 tangram application built on top of tg-rcore-tutorial ch1."
+version = "0.0.0"
+edition = "2024"
+authors = ["OpenAI Codex"]
+license = "GPL-3.0"
+readme = "README.md"
+keywords = ["rcore", "tutorial", "no-std", "riscv", "tangram"]
+categories = ["no-std", "embedded"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[dependencies]
+tg-sbi = { package = "tg-rcore-tutorial-sbi", version = "0.4.8", features = ["nobios"] }
+tg-rcore-tutorial-gfx = { package = "wpj-tg-rcore-tutorial-gfx", version = "0.0.0" }

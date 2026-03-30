@@ -1,12 +1,9 @@
 [package]
-name = "tg-rcore-tutorial-user"
+name = "wpj-tg-rcore-tutorial-user"
 description = "User-space apps for rCore Tutorial chapters (subset for ch2)."
-version = "0.4.8"
+version = "0.0.0"
 edition = "2024"
 authors = ["YdrMaster <ydrml@hotmail.com>"]
-repository = "https://github.com/rcore-os/tg-rcore-tutorial-user"
-homepage = "https://github.com/rcore-os/tg-rcore-tutorial-user/tree/test"
-documentation = "https://docs.rs/tg-rcore-tutorial-user"
 license = "GPL-3.0"
 readme = "README.md"
 keywords = ["rcore", "tutorial", "no-std", "riscv", "user-apps"]
@@ -23,6 +20,8 @@ panic = "abort"
 panic = "abort"
 
 [dependencies]
-tg-console = { package = "tg-rcore-tutorial-console", path = "../tg-rcore-tutorial-console", version = "0.4.2-preview.7" }
-tg-syscall = { package = "tg-rcore-tutorial-syscall", path = "../tg-rcore-tutorial-syscall", version = "0.4.2-preview.7", features = ["user"] }
+tg-console = { package = "tg-rcore-tutorial-console", version = "0.4.8" }
+tg-syscall = { package = "tg-rcore-tutorial-syscall", version = "0.4.8", features = ["user"] }
 customizable-buddy = "0.0.2"
+
+[workspace]

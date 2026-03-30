@@ -1,0 +1,4 @@
+[patch.crates-io]
+wpj-tg-rcore-tutorial-easy-fs = { path = "tg-rcore-tutorial-easy-fs" }
+wpj-tg-rcore-tutorial-sync = { path = "tg-rcore-tutorial-sync" }
+wpj-tg-rcore-tutorial-gfx = { path = "tg-rcore-tutorial-gfx" }

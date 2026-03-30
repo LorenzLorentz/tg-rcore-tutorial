@@ -22,6 +22,11 @@ extern "C" fn main() -> i32 {
         return 0;
     }
 
+    if option_env!("CHAPTER").unwrap_or("0") == "10" {
+        exec(option_env!("T2L5_SCENARIO").unwrap_or("t2l5_mutex_stress"));
+        return 0;
+    }
+
     if fork() == 0 {
         // 子进程执行实际目标程序，父进程负责兜底回收孤儿退出。
         let target = match option_env!("CHAPTER").unwrap_or("0") {

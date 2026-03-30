@@ -2,6 +2,29 @@ use super::{Mutex, UPIntrFreeCell};
 use alloc::{collections::VecDeque, sync::Arc};
 use tg_task_manage::ThreadId;
 
+/// 条件变量等待结果。
+pub struct CondvarWaitResult {
+    /// 因释放互斥锁而被唤醒的线程。
+    pub mutex_wakeup_tid: Option<ThreadId>,
+}
+
+/// 条件变量 signal 结果。
+pub struct CondvarSignalResult {
+    /// 被 signal 的线程。
+    pub tid: ThreadId,
+    /// 该线程需要重新竞争的互斥锁 ID。
+    pub mutex_id: usize,
+    /// signal 时是否已经重新拿到互斥锁。
+    pub acquired_mutex: bool,
+}
+
+/// 条件变量等待者。
+pub struct CondvarWaiter {
+    tid: ThreadId,
+    mutex_id: usize,
+    mutex: Arc<dyn Mutex>,
+}
+
 /// Condvar
 pub struct Condvar {
     /// UPIntrFreeCell<CondvarInner>
@@ -11,7 +34,7 @@ pub struct Condvar {
 /// CondvarInner
 pub struct CondvarInner {
     /// block queue
-    pub wait_queue: VecDeque<ThreadId>,
+    pub wait_queue: VecDeque<CondvarWaiter>,
 }
 
 impl Condvar {
@@ -27,38 +50,48 @@ impl Condvar {
         }
     }
     /// 唤醒某个阻塞在当前条件变量上的线程
-    pub fn signal(&self) -> Option<ThreadId> {
+    pub fn signal(&self) -> Option<CondvarSignalResult> {
         let mut inner = self.inner.exclusive_access();
-        inner.wait_queue.pop_front()
+        inner.wait_queue.pop_front().map(|waiter| {
+            let acquired_mutex = waiter.mutex.lock(waiter.tid);
+            CondvarSignalResult {
+                tid: waiter.tid,
+                mutex_id: waiter.mutex_id,
+                acquired_mutex,
+            }
+        })
     }
 
-    /*
-    pub fn wait(&self) {
-        let mut inner = self.inner.exclusive_access();
-        inner.wait_queue.push_back(current_task().unwrap());
-        drop(inner);
-        block_current_and_run_next();
-    }
-    */
     /// 将当前线程阻塞在条件变量上
-    pub fn wait_no_sched(&self, tid: ThreadId) -> bool {
+    pub fn wait_no_sched(&self, tid: ThreadId, mutex_id: usize, mutex: Arc<dyn Mutex>) -> bool {
         self.inner.exclusive_session(|inner| {
-            inner.wait_queue.push_back(tid);
+            inner.wait_queue.push_back(CondvarWaiter {
+                tid,
+                mutex_id,
+                mutex,
+            });
         });
         false
     }
-    /// 从 mutex 的锁中释放一个线程，并将其阻塞在条件变量的等待队列中，等待其他线程运行完毕，当前的线程再试图获取这个锁
+    /// 原子地释放互斥锁并把线程挂到条件变量队列。
     ///
-    /// 注意：下面是简化版的实现，在 mutex 唤醒一个线程之后，当前线程就直接获取这个 mutex，不管能不能获取成功
-    /// 这里是单纯为了过测例，
+    /// 被 signal 的线程会在 signal 路径上重新竞争互斥锁，
+    /// 只有真正拿到锁之后才会返回到用户态。
     pub fn wait_with_mutex(
         &self,
         tid: ThreadId,
+        mutex_id: usize,
         mutex: Arc<dyn Mutex>,
-    ) -> (bool, Option<ThreadId>) {
-        // 教学提示：标准条件变量语义应包含“原子地解锁 + 入队 + 睡眠 + 被唤醒后重试加锁”。
-        // 此处为教学简化实现，便于在章节中聚焦主流程。
-        let waking_tid = mutex.unlock().unwrap();
-        (mutex.lock(tid), Some(waking_tid))
+    ) -> CondvarWaitResult {
+        self.inner.exclusive_session(|inner| {
+            inner.wait_queue.push_back(CondvarWaiter {
+                tid,
+                mutex_id,
+                mutex: Arc::clone(&mutex),
+            });
+        });
+        CondvarWaitResult {
+            mutex_wakeup_tid: mutex.unlock(),
+        }
     }
 }

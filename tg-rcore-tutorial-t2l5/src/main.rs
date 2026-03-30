@@ -65,7 +65,7 @@ use crate::{
     fs::{FS, read_all},
     impls::{Sv39Manager, SyscallContext},
     process::{Process, Thread},
-    processor::{ProcManager, ProcessorInner, ThreadManager},
+    processor::{KERNEL_METRICS, ProcManager, ProcessorInner, ThreadManager},
 };
 use alloc::alloc::alloc;
 use core::{alloc::Layout, cell::UnsafeCell, mem::MaybeUninit};
@@ -160,6 +160,30 @@ static KERNEL_SPACE: KernelSpace = KernelSpace::new();
 /// VirtIO MMIO 设备地址范围
 pub const MMIO: &[(usize, usize)] = &[(0x1000_1000, 0x00_1000)];
 
+/// t2l5 trace 请求：清零内核计数器。
+pub const T2L5_TRACE_RESET_METRICS: usize = 0x200;
+/// t2l5 trace 请求：读取上下文切换次数。
+pub const T2L5_TRACE_GET_CONTEXT_SWITCHES: usize = 0x201;
+/// t2l5 trace 请求：读取同步阻塞次数。
+pub const T2L5_TRACE_GET_BLOCKED_SYNC: usize = 0x202;
+/// t2l5 trace 请求：读取同步唤醒次数。
+pub const T2L5_TRACE_GET_WAKEUPS: usize = 0x203;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FaultMode {
+    None,
+    MutexDropWakeup,
+    SemaphoreDropWakeup,
+}
+
+fn fault_mode() -> FaultMode {
+    match option_env!("T2L5_FAULT_MODE") {
+        Some("mutex_drop_wakeup") => FaultMode::MutexDropWakeup,
+        Some("semaphore_drop_wakeup") => FaultMode::SemaphoreDropWakeup,
+        _ => FaultMode::None,
+    }
+}
+
 /// 内核主函数
 ///
 /// 与第七章相比：
@@ -200,6 +224,7 @@ extern "C" fn rust_main() -> ! {
     tg_syscall::init_signal(&SyscallContext);
     tg_syscall::init_thread(&SyscallContext); // 本章新增：线程系统调用
     tg_syscall::init_sync_mutex(&SyscallContext); // 本章新增：同步原语系统调用
+    tg_syscall::init_trace(&SyscallContext); // t2l5 新增：实验观测计数器
     // 步骤 8：加载 initproc（返回 Process + Thread）
     let initproc = read_all(FS.open("initproc", OpenFlags::RDONLY).unwrap());
     if let Some((process, thread)) = Process::from_elf(ElfFile::new(initproc.as_slice()).unwrap()) {
@@ -246,6 +271,9 @@ extern "C" fn rust_main() -> ! {
                                     *ctx.a_mut(0) = ret as _;
                                     if ret == -1 {
                                         // 阻塞：从就绪队列移除，等待资源释放后唤醒
+                                        KERNEL_METRICS
+                                            .blocked_sync_ops
+                                            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
                                         unsafe { (*processor).make_current_blocked() };
                                     } else {
                                         // 成功获取：正常挂起（时间片轮转）
@@ -671,6 +699,30 @@ mod impls {
         }
     }
 
+    impl Trace for SyscallContext {
+        #[inline]
+        fn trace(&self, _caller: Caller, trace_request: usize, _id: usize, _data: usize) -> isize {
+            use core::sync::atomic::Ordering;
+
+            match trace_request {
+                crate::T2L5_TRACE_RESET_METRICS => {
+                    crate::KERNEL_METRICS.reset();
+                    0
+                }
+                crate::T2L5_TRACE_GET_CONTEXT_SWITCHES => crate::KERNEL_METRICS
+                    .context_switches
+                    .load(Ordering::Relaxed) as isize,
+                crate::T2L5_TRACE_GET_BLOCKED_SYNC => crate::KERNEL_METRICS
+                    .blocked_sync_ops
+                    .load(Ordering::Relaxed) as isize,
+                crate::T2L5_TRACE_GET_WAKEUPS => {
+                    crate::KERNEL_METRICS.wakeups.load(Ordering::Relaxed) as isize
+                }
+                _ => -1,
+            }
+        }
+    }
+
     impl Clock for SyscallContext {
         #[inline]
         fn clock_gettime(&self, _caller: Caller, clock_id: ClockId, tp: usize) -> isize {
@@ -883,15 +935,20 @@ mod impls {
 
         /// V 操作：释放信号量，唤醒等待线程
         fn semaphore_up(&self, _caller: Caller, sem_id: usize) -> isize {
+            use core::sync::atomic::Ordering;
+
             let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
             let tid = unsafe { (*processor).current().unwrap().tid };
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let sem = Arc::clone(current_proc.semaphore_list[sem_id].as_ref().unwrap());
             current_proc.semaphore_deadlock.release(tid, sem_id);
             if let Some(tid) = sem.up() {
-                current_proc.semaphore_deadlock.acquire(tid, sem_id);
-                unsafe {
-                    (*processor).re_enque(tid);
+                if crate::fault_mode() != crate::FaultMode::SemaphoreDropWakeup {
+                    current_proc.semaphore_deadlock.acquire(tid, sem_id);
+                    crate::KERNEL_METRICS.wakeups.fetch_add(1, Ordering::Relaxed);
+                    unsafe {
+                        (*processor).re_enque(tid);
+                    }
                 }
             }
             0
@@ -946,14 +1003,25 @@ mod impls {
 
         /// 解锁，唤醒等待线程
         fn mutex_unlock(&self, _caller: Caller, mutex_id: usize) -> isize {
+            use core::sync::atomic::Ordering;
+
             let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let mutex = Arc::clone(current_proc.mutex_list[mutex_id].as_ref().unwrap());
             let waking_tid = mutex.unlock();
-            current_proc.mutex_deadlock.unlock(mutex_id, waking_tid);
-            if let Some(tid) = waking_tid {
-                unsafe {
-                    (*processor).re_enque(tid);
+            match waking_tid {
+                Some(tid) if crate::fault_mode() == crate::FaultMode::MutexDropWakeup => {
+                    current_proc.mutex_deadlock.unlock(mutex_id, Some(tid));
+                }
+                Some(tid) => {
+                    current_proc.mutex_deadlock.unlock(mutex_id, Some(tid));
+                    crate::KERNEL_METRICS.wakeups.fetch_add(1, Ordering::Relaxed);
+                    unsafe {
+                        (*processor).re_enque(tid);
+                    }
+                }
+                None => {
+                    current_proc.mutex_deadlock.unlock(mutex_id, None);
                 }
             }
             0
@@ -1003,12 +1071,22 @@ mod impls {
 
         /// 唤醒一个等待线程
         fn condvar_signal(&self, _caller: Caller, condvar_id: usize) -> isize {
+            use core::sync::atomic::Ordering;
+
             let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let condvar = Arc::clone(current_proc.condvar_list[condvar_id].as_ref().unwrap());
-            if let Some(tid) = condvar.signal() {
-                unsafe {
-                    (*processor).re_enque(tid);
+            if let Some(result) = condvar.signal() {
+                if result.acquired_mutex {
+                    current_proc
+                        .mutex_deadlock
+                        .lock_success(result.tid, result.mutex_id);
+                    crate::KERNEL_METRICS.wakeups.fetch_add(1, Ordering::Relaxed);
+                    unsafe {
+                        (*processor).re_enque(result.tid);
+                    }
+                } else {
+                    current_proc.mutex_deadlock.block(result.tid, result.mutex_id);
                 }
             }
             0
@@ -1016,19 +1094,25 @@ mod impls {
 
         /// 等待条件变量（释放锁 + 阻塞 + 重新获取锁）
         fn condvar_wait(&self, _caller: Caller, condvar_id: usize, mutex_id: usize) -> isize {
+            use core::sync::atomic::Ordering;
+
             let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
             let current = unsafe { (*processor).current().unwrap() };
             let tid = current.tid;
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let condvar = Arc::clone(current_proc.condvar_list[condvar_id].as_ref().unwrap());
             let mutex = Arc::clone(current_proc.mutex_list[mutex_id].as_ref().unwrap());
-            let (flag, waking_tid) = condvar.wait_with_mutex(tid, mutex);
-            if let Some(waking_tid) = waking_tid {
+            let result = condvar.wait_with_mutex(tid, mutex_id, mutex);
+            current_proc
+                .mutex_deadlock
+                .unlock(mutex_id, result.mutex_wakeup_tid);
+            if let Some(waking_tid) = result.mutex_wakeup_tid {
+                crate::KERNEL_METRICS.wakeups.fetch_add(1, Ordering::Relaxed);
                 unsafe {
                     (*processor).re_enque(waking_tid);
                 }
             }
-            if !flag { -1 } else { 0 }
+            -1
         }
 
         /// 死锁检测（TODO 练习题）

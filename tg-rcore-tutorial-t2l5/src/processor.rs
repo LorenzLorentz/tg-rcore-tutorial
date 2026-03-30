@@ -20,7 +20,10 @@
 
 use crate::process::{Process, Thread};
 use alloc::collections::{BTreeMap, VecDeque};
-use core::cell::UnsafeCell;
+use core::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 use tg_task_manage::{Manage, PThreadManager, ProcId, Schedule, ThreadId};
 
 /// 处理器内部类型（双层管理器）
@@ -50,6 +53,37 @@ impl Processor {
 
 /// 全局处理器实例
 pub static PROCESSOR: Processor = Processor::new();
+
+/// 内核同步实验计数器。
+pub struct KernelMetrics {
+    /// 总上下文切换次数。
+    pub context_switches: AtomicUsize,
+    /// 因同步原语阻塞的次数。
+    pub blocked_sync_ops: AtomicUsize,
+    /// 同步原语唤醒次数。
+    pub wakeups: AtomicUsize,
+}
+
+impl KernelMetrics {
+    /// 创建空计数器。
+    pub const fn new() -> Self {
+        Self {
+            context_switches: AtomicUsize::new(0),
+            blocked_sync_ops: AtomicUsize::new(0),
+            wakeups: AtomicUsize::new(0),
+        }
+    }
+
+    /// 清零计数器。
+    pub fn reset(&self) {
+        self.context_switches.store(0, Ordering::Relaxed);
+        self.blocked_sync_ops.store(0, Ordering::Relaxed);
+        self.wakeups.store(0, Ordering::Relaxed);
+    }
+}
+
+/// 全局内核同步实验计数器。
+pub static KERNEL_METRICS: KernelMetrics = KernelMetrics::new();
 
 /// 线程管理器
 ///
@@ -97,7 +131,13 @@ impl Schedule<ThreadId> for ThreadManager {
     }
     /// 取出下一个就绪线程
     fn fetch(&mut self) -> Option<ThreadId> {
-        self.ready_queue.pop_front()
+        let next = self.ready_queue.pop_front();
+        if next.is_some() {
+            KERNEL_METRICS
+                .context_switches
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        next
     }
 }
 

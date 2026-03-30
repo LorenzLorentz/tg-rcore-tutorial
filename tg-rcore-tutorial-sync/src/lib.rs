@@ -15,7 +15,7 @@ mod up;
 
 extern crate alloc;
 
-pub use condvar::Condvar;
+pub use condvar::{Condvar, CondvarSignalResult, CondvarWaitResult};
 pub use mutex::{Mutex, MutexBlocking};
 pub use semaphore::Semaphore;
 pub use up::{UPIntrFreeCell, UPIntrRefMut};

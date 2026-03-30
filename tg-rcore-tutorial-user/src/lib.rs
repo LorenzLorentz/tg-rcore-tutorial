@@ -6,6 +6,7 @@
 //! - 其余辅助函数（sleep/pipe_*）展示了常见 syscall 组合用法。
 
 mod heap;
+mod sync_lab;
 
 extern crate alloc;
 
@@ -13,6 +14,7 @@ use tg_console::log;
 
 pub use tg_console::{print, println};
 pub use tg_syscall::*;
+pub use sync_lab::*;
 
 #[unsafe(no_mangle)]
 #[unsafe(link_section = ".text.entry")]

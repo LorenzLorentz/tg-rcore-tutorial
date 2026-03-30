@@ -1,192 +1,236 @@
-# 第十章：公平同步互斥实验
+# t2l5：同步互斥机制实验平台
 
-本章同样**基于 `tg-rcore-tutorial-ch8` 继续开发**。原因很直接：`ch8` 已经有线程、阻塞型互斥锁、信号量、条件变量和死锁检测，是把“同步原语能跑起来”推进到“公平、可测、可分析、可讨论 starvation”最自然的基线。
+这个目录现在不再是 `ch8` 的说明壳子，而是一套能直接跑的同步实验平台。
 
-如果从 `ch5` 或 `ch6` 开始做，会先花很多精力把线程和阻塞/唤醒机制补齐；从 `ch8` 开始，则可以把精力集中在公平性和可验证性上。
+目标不是只把锁“写出来”，而是把它们变成一组可测、可比较、可做错误对照的系统：
 
-## 练习任务（以教代学，学以致用）
+- `spinlock`
+- `mutex`
+- `semaphore`
+- `condvar`
+- `rwlock`
 
-- 学：从“能实现锁”提升到“能解释锁的公平性、持锁时间、饥饿风险和上下文切换代价”。
-- 教：把自旋锁、睡眠锁、信号量、条件变量、读写锁整理成一组可比较、可压测、可写出反例的同步实验。
-- 用：通过经典并发问题和压力测试，把同步原语变成一个可测系统，而不是只停留在概念演示。
+## 我完成了什么
 
-> 注：本目录当前也是从 `ch8` 复制出的后续开发脚手架，代码主体仍是 `ch8` 基线；本 README 描述的是后续应实现的目标与设计。
+### 1. 内核侧
 
-## 参考资料
+- 修正了 `condvar` 语义：
+  - `wait` 现在会把线程挂进条件变量队列、释放互斥锁、阻塞；
+  - `signal` 会把 waiter 重新接到对应 mutex 上，只有拿到锁后才回到用户态；
+  - 这已经不是原来 `ch8` 那个“为了过测例的简化实现”。
+- 在 `t2l5` 内核里接入了 `trace` 观测口：
+  - `context_switches`
+  - `blocked_sync_ops`
+  - `wakeups`
+- 加了两类故障注入：
+  - `mutex_drop_wakeup`
+  - `semaphore_drop_wakeup`
 
-- 同步互斥与实验设计参考：
-  - <https://github.com/LearningOS/bachelor-thesis/blob/main/jyt-thesis.pdf>
-  - <https://github.com/LearningOS/bachelor-thesis/blob/main/xac-thesis.pdf>
+### 2. 用户态实验层
 
-## 你要实现的核心内容
+我没有为 `spinlock` 和 `rwlock` 额外扩 syscall，而是做成了用户态实验原语：
 
-### 1. 同步原语族
+- `spinlock`
+  - 用 ticket lock 实现公平自旋；
+  - 在等待路径里主动 `sched_yield()`，适配本教程当前的协作式线程模型。
+- `rwlock`
+  - `FairRwLock`：服务队列 + 资源信号量，防止 writer 被 reader 插队饿死；
+  - `ReaderPreferRwLock`：作为对照版本，故意保留 writer starvation 风险。
 
-建议按由浅入深的顺序推进：
+同时补了 `sync_lab` 辅助层，统一提供：
 
-1. 自旋锁 `spinlock`
-2. 睡眠锁 / 阻塞互斥锁 `mutex`
-3. 信号量 `semaphore`
-4. 条件变量 `condvar`
-5. 读写锁 `rwlock`
+- 内核计数器读取
+- 微秒时间戳
+- 原子统计器
+- ticket spinlock
+- fair / reader-prefer rwlock
 
-如果教学上想突出“公平性”，建议不要只做“最容易写的版本”，而要显式比较：
+### 3. 经典问题
 
-- 自旋锁：简单 TAS 锁 vs ticket lock
-- 互斥锁：抢占式 unlock 后竞争 vs FIFO handoff
-- 读写锁：reader-prefer / writer-prefer / fair queue
+我把验收场景落成了 5 组用户程序：
 
-### 2. 把“能跑”变成“可测”
+- `t2l5_semaphore_pc`
+  - 用 semaphore 做生产者-消费者
+- `t2l5_condvar_pc`
+  - 用 mutex + condvar 做生产者-消费者
+- `t2l5_rwlock_fair`
+  - 读者-写者
+- `t2l5_phil_mutex`
+  - 哲学家进餐
+- `t2l5_mutex_stress` / `t2l5_spin_ticket`
+  - 高竞争压力测试，用来直接比较 sleep lock 和 spin lock
 
-每种同步原语都应该输出或可推导下面这些指标：
+### 4. 能失败的对照测试
 
-- 锁竞争次数
-- 平均持锁时间
-- 最大等待时间
-- 上下文切换次数
-- 是否出现 starvation
+每类原语都有对应的失败对照：
 
-这里的重点不是“打印很多日志”，而是建立统一观测口径。否则你无法比较“自旋锁浪费 CPU”与“睡眠锁带来更多上下文切换”之间的真实差异。
+- `spinlock`
+  - `t2l5_spin_broken`
+  - 主线程拿锁后永不释放，子线程永久自旋
+- `mutex`
+  - `T2L5_FAULT_MODE=mutex_drop_wakeup`
+  - waiter 被从队列里摘掉但不重新入队
+- `semaphore`
+  - `T2L5_FAULT_MODE=semaphore_drop_wakeup`
+  - `up` 之后不唤醒等待者
+- `condvar`
+  - `t2l5_condvar_if_bug`
+  - 两个 consumer 用 `if` 而不是 `while`，第二个线程会在条件不成立时继续往下走并 panic
+- `rwlock`
+  - `t2l5_rwlock_reader_pref`
+  - reader-prefer 版本会把 writer 等待时间推到阈值之外，并触发 panic
 
-### 3. 把“正确版本”与“能失败的反例”配对
+## 公平性语义
 
-每个同步原语都建议配一个故意出错的对照测试思路，例如：
+### `spinlock`
 
-- 去掉 `wakeup`
-- 调换 `unlock` 与唤醒顺序
-- 把条件变量的 `wait` 写成 `if` 而不是 `while`
-- 读写锁不做公平队列，观察写者长期饥饿
+- 实现：ticket lock
+- 语义：FIFO 次序，bounded waiting
+- 观测重点：不阻塞内核，但上下文切换数高
 
-本章不要求你现在写出测试代码，但 README 和 `exercise.md` 应该把这些反例类型明确写出来，因为它们是“为什么正确实现值得信”的重要组成部分。
+### `mutex`
 
-### 4. 经典问题作为综合验收
+- 实现：FIFO wait queue + handoff unlock
+- 语义：不允许新线程在 unlock 后抢在队首 waiter 前面 barging
+- 对照：去掉 wakeup 后直接挂死
 
-建议使用下面这些经典场景：
+### `semaphore`
 
-- 生产者 - 消费者
-- 读者 - 写者
-- 哲学家进餐
+- 实现：FIFO wait queue
+- 语义：资源不足时睡眠，`up` 唤醒队首
+- 对照：故意丢 wakeup
 
-这些题目不要只当作“教材情怀”，而应被用作：
+### `condvar`
 
-- 比较不同同步原语组合的行为
-- 暴露 lost wakeup、错误唤醒、长期饥饿
-- 观测自旋锁与睡眠锁在高竞争下的差异
+- 语义：Mesa 风格
+- 用户侧必须写：
 
-## 我的设计建议
+```rust
+while !predicate() {
+    condvar_wait(...);
+}
+```
 
-### 1. 把“公平性”当成显式设计目标，而不是事后补充
+- 对照：`if` 版本会失败
 
-如果你从一开始就只追求“临界区不出错”，最后很可能得到一个正确但极不公平的实现。建议每种同步原语都先写清楚自己的目标：
+### `rwlock`
 
-- 是否 FIFO
-- 是否允许 barging
-- 是否保证 bounded waiting
-- 是否允许 reader / writer 偏置
+- 正确版本：fair service queue
+- 对照版本：reader-prefer
+- 观测重点：writer 最大等待时间与 starvation
 
-这些不是实现细节，而是语义定义的一部分。
+## 统一观测口径
 
-### 2. 自旋锁建议至少保留一个公平版本
+所有 summary 都统一打印：
 
-最基础的自旋锁可以是简单 TAS，但如果要讨论 starvation，最好再给一个 ticket lock 版本。这样你才能在实验中比较：
+- `contention`
+- `avg_wait_us`
+- `max_wait_us`
+- `avg_hold_us`
+- `max_hold_us`
+- `ctx_switches`
+- `blocked`
+- `wakeups`
+- `starvation`
 
-- 简单 TAS：实现短，但竞争下可能极不公平
-- ticket lock：等待次序更稳定，但有额外开销
+其中：
 
-### 3. 睡眠锁要重点防止 barging
+- `ctx_switches / blocked / wakeups` 来自内核 trace 计数器
+- `wait / hold / starvation` 来自用户态实验包装层
 
-阻塞互斥锁的常见问题不是“锁拿不到”，而是“刚被唤醒的线程又被新线程插队”。因此建议：
+## 一站式核验
 
-- wait queue 明确 FIFO
-- unlock 时优先 handoff 给队首等待者
-- 在 README 中解释 handoff 与重新竞争的差异
+### 直接跑完整套
 
-### 4. 条件变量必须强调 Mesa 语义
+```bash
+cd tg-rcore-tutorial-t2l5
+./verify.sh
+```
 
-教学里最容易出错的一点是：线程被唤醒后并不等于条件一定成立。因此应明确要求：
+脚本会：
 
-- `wait` 释放锁并阻塞
-- 被唤醒后重新竞争锁
-- 返回后必须重新检查谓词，故用户态示例要用 `while` 而不是 `if`
+1. 如果不在容器里，就通过 `~/rcore_docker.sh` 进入 Docker。
+2. 先做一次 warm-up build。
+3. 运行 success cases。
+4. 运行 control cases。
+5. 在终端打印两张表。
+6. 把原始日志保存到 `.logs/suite/`。
 
-### 5. 读写锁最好做成“策略可选”
+### 只跑正确版本
 
-因为读者优先、写者优先、公平队列三者没有绝对优劣。最适合作为实验的是：
+```bash
+./verify.sh --mode success
+```
 
-- 给出统一接口
-- 用参数切换公平策略
-- 在读多写少和写者密集两种负载下比较最大等待时间
+### 只跑错误对照
 
-## 观测建议
+```bash
+./verify.sh --mode control
+```
 
-可以为所有同步原语共享一套事件记录：
+`test.sh` 只是 `verify.sh` 的别名。
 
-- `lock_attempt`
-- `lock_acquired`
-- `lock_release`
-- `sleep`
-- `wakeup`
-- `handoff`
+## 最近一次验证结果
 
-然后从这些事件推导：
+### Success Cases
 
-- 平均持锁时间
-- 平均等待时间
-- 最大等待时间
-- 上下文切换次数
-- starvation 次数
+2026-03-29 在 Docker/QEMU 中执行默认入口 `./verify.sh`，success/control 两套都通过。
 
-其中“starvation”建议定义为：等待时间超过阈值且在实验窗口结束前仍未获得资源。
+来自最近一次默认 `./verify.sh` 的 summary：
 
-## 建议落点
-
-<a id="source-nav"></a>
-
-## 源码阅读导航索引
-
-[返回根文档扩展章节导航](../README.md#extended-chapters-nav)
-
-建议按“线程阻塞唤醒 -> 同步实现 -> 公平性策略”主线阅读：
-
-| 阅读顺序 | 文件 | 重点问题 |
-|---|---|---|
-| 1 | `src/process.rs` | 线程阻塞和重新入队的状态放在哪里？ |
-| 2 | `src/main.rs` | 锁 / 信号量 / 条件变量 syscall 当前是如何接入的？ |
-| 3 | `../tg-rcore-tutorial-sync` | 哪些同步原语适合抽到可复用组件层？ |
-| 4 | `src/processor.rs` | 不同锁实现会如何影响调度与切换频率？ |
-
-## 推荐改动范围
-
-| 路径 | 建议角色 |
+| case | 关键结果 |
 |---|---|
-| `tg-rcore-tutorial-t2l5/src/main.rs` | 放 syscall 接入与事件触发点 |
-| `tg-rcore-tutorial-t2l5/src/process.rs` | 放线程阻塞态、等待队列关联信息 |
-| `tg-rcore-tutorial-sync` | 放尽可能可复用的锁、信号量、条件变量、读写锁实现 |
-| `tg-rcore-tutorial-t2l5/exercise.md` | 放任务拆分、对照测试要求与公平性讨论题 |
+| `spinlock:ticket` | `ops=960 avg_wait_us=8657 ctx_switches=15635 blocked=0 starvation=0` |
+| `mutex:fifo_blocking` | `ops=960 avg_wait_us=8026 ctx_switches=7753 blocked=959 starvation=0` |
+| `semaphore:producer_consumer` | `ops=240 avg_wait_us=12875 gate_blocks=120 starvation=0` |
+| `condvar:producer_consumer` | `ops=61 avg_wait_us=10374 blocked=66 starvation=0` |
+| `rwlock:fair` | `read_ops=600 write_ops=72 max_wait_us=5711 starvation=0` |
+| `mutex:philosophers` | `ops=20 max_wait_us=735586 starvation=0` |
 
-## 建议里程碑
+最重要的对比是：
 
-1. 先做最小自旋锁和阻塞互斥锁闭环。
-2. 再补统一事件采集，能比较自旋与睡眠两条路径。
-3. 然后加入 semaphore / condvar，并完成生产者 - 消费者。
-4. 再加入 rwlock，并比较 reader-prefer / writer-prefer / fair queue。
-5. 最后补经典反例和压力测试，验证 starvation 与最大等待时间。
+- `spinlock`：`blocked=0`，但 `ctx_switches=15635`
+- `mutex`：`blocked=959`，但 `ctx_switches=7753`
 
-## DoD 验收标准
+这正好体现了本实验想观察的差异：spin 路径不睡眠，但代价是更高的调度切换与等待成本。
 
-- [ ] 能说明为什么本章基于 `ch8` 而不是更早章节
-- [ ] 能给出每种同步原语的公平性语义说明
-- [ ] 能比较自旋锁与睡眠锁的竞争开销和上下文切换差异
-- [ ] 能说明条件变量为什么必须配合谓词循环使用
-- [ ] 能设计“故意错误版本”的对照测试思路
-- [ ] 能解释 starvation 如何被检测和统计
+### Control Cases
 
-## 当前脚手架说明
+同一次默认 `./verify.sh` 的 control 结果：
 
-本目录目前同样继承了 `ch8` 的代码、`build.rs` 和测试脚本基线，因此：
+| case | 结果 |
+|---|---|
+| `t2l5_spin_broken` | `timeout` |
+| `mutex_drop_wakeup` | `timeout` |
+| `semaphore_drop_wakeup` | `timeout` |
+| `t2l5_condvar_if_bug` | 观察到 consumer 在 `ready=0` 时继续执行并 panic |
+| `t2l5_rwlock_reader_pref` | 观察到 `writer_max_wait_us=1233616 starvation=1`，随后 panic |
 
-- 当前内核实现仍接近 `ch8`
-- 当前用户程序集和测试脚本仍是 `ch8` 风格
-- 后续正式实现本章时，应优先改同步组件、事件采集和对照测试框架，而不是先堆新 syscall
+## 关键文件
 
-也就是说，本章现在提供的是一个**明确的设计目标和代码落点**，而不是已经完成的实现。
+- `src/main.rs`
+  - trace 计数器接线
+  - sync syscall
+  - 故障注入
+- `src/processor.rs`
+  - 内核级 `context_switches / blocked / wakeups`
+- `../tg-rcore-tutorial-sync/src/condvar.rs`
+  - 正确的 condvar 等待/唤醒链路
+- `../tg-rcore-tutorial-user/src/sync_lab.rs`
+  - 用户态实验辅助层
+- `../tg-rcore-tutorial-user/src/bin/t2l5_*`
+  - success / control 场景
+- `verify.sh`
+  - 一站式入口
+- `scripts/run_suite.py`
+  - 批量执行与结果判定
+- `lab-notes.md`
+  - 过程记录
+
+## 过程记录
+
+实现过程、取舍和踩坑记录在：
+
+- `lab-notes.md`
+
+这份记录不是事后总结，而是按“读代码 -> 动手改 -> 跑 Docker/QEMU -> 修 bug -> 再验证”的顺序写的。

@@ -245,6 +245,35 @@ impl<'a> Canvas<'a> {
             self.fill_triangle(points[0], tri[0], tri[1], color);
         }
     }
+
+    /// Uploads an external BGRA8888 pixel buffer and scales it to fit.
+    pub fn blit_bgra8888(&mut self, src: &[u32], src_width: usize, src_height: usize) {
+        if src_width == 0 || src_height == 0 || src.len() < src_width.saturating_mul(src_height) {
+            return;
+        }
+
+        let dst_width = self.width;
+        let dst_height = self.height;
+        if dst_width == 0 || dst_height == 0 {
+            return;
+        }
+
+        let (scaled_width, scaled_height) =
+            scaled_size(src_width, src_height, dst_width, dst_height);
+        let offset_x = (dst_width.saturating_sub(scaled_width)) / 2;
+        let offset_y = (dst_height.saturating_sub(scaled_height)) / 2;
+        self.clear(Color::rgb(0, 0, 0));
+
+        for y in 0..scaled_height {
+            let src_y = y * src_height / scaled_height;
+            let dst_row = (offset_y + y) * dst_width;
+            let src_row = src_y * src_width;
+            for x in 0..scaled_width {
+                let src_x = x * src_width / scaled_width;
+                self.pixels[dst_row + offset_x + x] = src[src_row + src_x];
+            }
+        }
+    }
 }
 
 fn edge(a: Point, b: Point, p: Point) -> i64 {
@@ -253,6 +282,16 @@ fn edge(a: Point, b: Point, p: Point) -> i64 {
 
 fn same_sign(area: i64, v: i64) -> bool {
     if area > 0 { v >= 0 } else { v <= 0 }
+}
+
+fn scaled_size(src_width: usize, src_height: usize, dst_width: usize, dst_height: usize) -> (usize, usize) {
+    if dst_width * src_height <= dst_height * src_width {
+        let scaled_height = core::cmp::max(1, dst_width * src_height / src_width);
+        (dst_width, scaled_height)
+    } else {
+        let scaled_width = core::cmp::max(1, dst_height * src_width / src_height);
+        (scaled_width, dst_height)
+    }
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -363,6 +402,17 @@ impl<H: Hal> DisplayDriver<H> {
         self.gpu.flush()?;
         Ok(())
     }
+
+    /// Uploads a software-rendered frame and flushes it to the host display.
+    pub fn present_bgra8888(
+        &mut self,
+        pixels: &[u32],
+        src_width: usize,
+        src_height: usize,
+    ) -> Result<()> {
+        self.canvas().blit_bgra8888(pixels, src_width, src_height);
+        self.present()
+    }
 }
 
 /// GPU-backed display using the crate's default HAL.
@@ -400,6 +450,17 @@ impl<H> DisplayDriver<H> {
 
     /// Host-side stub present.
     pub fn present(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Host-side stub upload.
+    pub fn present_bgra8888(
+        &mut self,
+        pixels: &[u32],
+        src_width: usize,
+        src_height: usize,
+    ) -> Result<()> {
+        self.canvas().blit_bgra8888(pixels, src_width, src_height);
         Ok(())
     }
 }

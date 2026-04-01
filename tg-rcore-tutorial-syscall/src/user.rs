@@ -1,4 +1,6 @@
-use crate::{ClockId, SignalAction, SignalNo, Stat, SyscallId, TimeSpec};
+use crate::{
+    ClockId, FramebufferInfo, InputEvent, SignalAction, SignalNo, Stat, SyscallId, TimeSpec,
+};
 use bitflags::*;
 use native::*;
 
@@ -336,6 +338,31 @@ pub fn munmap(start: usize, len: usize) -> isize {
 #[inline]
 pub fn pipe(pipe_fd: &mut [usize]) -> isize {
     unsafe { syscall1(SyscallId::PIPE2, pipe_fd.as_mut_ptr() as _) }
+}
+
+/// 获取当前显示设备信息。
+#[inline]
+pub fn framebuffer_get_info(info: &mut FramebufferInfo) -> isize {
+    unsafe { syscall1(SyscallId::FRAMEBUFFER_GETINFO, info as *mut _ as usize) }
+}
+
+/// 将一帧 BGRA8888 像素提交到显示设备。
+#[inline]
+pub fn framebuffer_present(pixels: &[u32], width: usize, height: usize) -> isize {
+    unsafe {
+        syscall3(
+            SyscallId::FRAMEBUFFER_PRESENT,
+            pixels.as_ptr() as usize,
+            width,
+            height,
+        )
+    }
+}
+
+/// 轮询一个待处理输入事件。
+#[inline]
+pub fn input_poll(event: &mut InputEvent) -> isize {
+    unsafe { syscall1(SyscallId::INPUT_POLL, event as *mut _ as usize) }
 }
 
 /// 这个模块包含调用系统调用的最小封装，用户可以直接使用这些函数调用自定义的系统调用。

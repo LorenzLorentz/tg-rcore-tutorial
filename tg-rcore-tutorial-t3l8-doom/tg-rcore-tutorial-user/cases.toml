@@ -164,6 +164,7 @@ cases = [
     "race_adder_mutex_blocking",
     "phil_din_mutex",
     "test_condvar",
+    "doom",
     "pipetest",
     "pipe_large_test",
     "ch8b_usertest",

@@ -176,6 +176,24 @@ pub trait Trace: Sync {
     }
 }
 
+pub trait Platform: Sync {
+    fn framebuffer_getinfo(&self, caller: Caller, info: usize) -> isize {
+        unimplemented!()
+    }
+    fn framebuffer_present(
+        &self,
+        caller: Caller,
+        pixels: usize,
+        width: usize,
+        height: usize,
+    ) -> isize {
+        unimplemented!()
+    }
+    fn input_poll(&self, caller: Caller, event: usize) -> isize {
+        unimplemented!()
+    }
+}
+
 static PROCESS: Container<dyn Process> = Container::new();
 static IO: Container<dyn IO> = Container::new();
 static MEMORY: Container<dyn Memory> = Container::new();
@@ -185,6 +203,7 @@ static SIGNAL: Container<dyn Signal> = Container::new();
 static THREAD: Container<dyn Thread> = Container::new();
 static SYNC_MUTEX: Container<dyn SyncMutex> = Container::new();
 static TRACE: Container<dyn Trace> = Container::new();
+static PLATFORM: Container<dyn Platform> = Container::new();
 
 #[inline]
 pub fn init_process(process: &'static dyn Process) {
@@ -229,6 +248,11 @@ pub fn init_sync_mutex(sync_mutex: &'static dyn SyncMutex) {
 #[inline]
 pub fn init_trace(trace: &'static dyn Trace) {
     TRACE.init(trace);
+}
+
+#[inline]
+pub fn init_platform(platform: &'static dyn Platform) {
+    PLATFORM.init(platform);
 }
 
 pub enum SyscallResult {
@@ -313,6 +337,13 @@ pub fn handle(caller: Caller, id: SyscallId, args: [usize; 6]) -> SyscallResult 
             sync_mutex.enable_deadlock_detect(caller, args[0] as _)
         }),
         Id::TRACE => TRACE.call(id, |trace| trace.trace(caller, args[0], args[1], args[2])),
+        Id::FRAMEBUFFER_GETINFO => {
+            PLATFORM.call(id, |platform| platform.framebuffer_getinfo(caller, args[0]))
+        }
+        Id::FRAMEBUFFER_PRESENT => PLATFORM.call(id, |platform| {
+            platform.framebuffer_present(caller, args[0], args[1], args[2])
+        }),
+        Id::INPUT_POLL => PLATFORM.call(id, |platform| platform.input_poll(caller, args[0])),
         Id::SPAWN => PROCESS.call(id, |proc| proc.spawn(caller, args[0], args[1])),
         Id::SETPRIORITY => SCHEDULING.call(id, |sched| sched.set_priority(caller, args[0] as _)),
         Id::BRK => PROCESS.call(id, |proc| proc.sbrk(caller, args[0] as _)),

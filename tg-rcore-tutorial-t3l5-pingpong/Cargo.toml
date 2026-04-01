@@ -26,7 +26,7 @@ panic = "abort"
 xmas-elf = "0.8.0"
 riscv = "0.10.1"
 spin = "0.9"
-virtio-drivers = "0.1.0"
+virtio-drivers = { path = "../vendor/virtio-drivers" }
 
 tg-sbi = { package = "tg-rcore-tutorial-sbi", version = "0.4.8", features = ["nobios"] }
 tg-linker = { package = "tg-rcore-tutorial-linker", version = "0.4.8" }

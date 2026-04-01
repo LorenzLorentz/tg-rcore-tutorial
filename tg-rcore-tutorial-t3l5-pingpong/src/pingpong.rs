@@ -70,7 +70,6 @@ struct PlayerSlot {
     pid: Option<ProcId>,
     up_key: u8,
     down_key: u8,
-    pending_steps: i32,
     paddle_y: i32,
 }
 
@@ -80,7 +79,6 @@ impl PlayerSlot {
             pid: None,
             up_key: 0,
             down_key: 0,
-            pending_steps: 0,
             paddle_y: default_y,
         }
     }
@@ -93,7 +91,6 @@ impl PlayerSlot {
         self.pid = Some(pid);
         self.up_key = ascii_lower(up_key);
         self.down_key = ascii_lower(down_key);
-        self.pending_steps = 0;
         self.paddle_y = default_y;
     }
 }
@@ -141,8 +138,6 @@ impl PingPongKernel {
             self.players[0].clear(default_y);
             self.players[1].clear(default_y);
         } else {
-            self.players[0].pending_steps = 0;
-            self.players[1].pending_steps = 0;
             self.players[0].paddle_y = default_y;
             self.players[1].paddle_y = default_y;
         }
@@ -216,11 +211,6 @@ impl PingPongKernel {
         if slot.pid != Some(pid) {
             return -1;
         }
-        if slot.pending_steps != 0 {
-            let step = slot.pending_steps.clamp(-3, 3);
-            slot.pending_steps = 0;
-            slot.paddle_y = (slot.paddle_y + step * PADDLE_STEP).clamp(0, LOGICAL_H - PADDLE_H);
-        }
         self.phase_code()
     }
 
@@ -266,9 +256,9 @@ impl PingPongKernel {
                     continue;
                 }
                 if ch == slot.up_key {
-                    slot.pending_steps -= 1;
+                    slot.paddle_y = (slot.paddle_y - PADDLE_STEP).clamp(0, LOGICAL_H - PADDLE_H);
                 } else if ch == slot.down_key {
-                    slot.pending_steps += 1;
+                    slot.paddle_y = (slot.paddle_y + PADDLE_STEP).clamp(0, LOGICAL_H - PADDLE_H);
                 }
             }
         }
@@ -519,14 +509,14 @@ fn draw_paddle(canvas: &mut Canvas<'_>, origin: Point, scale: i32, x: i32, y: i3
 
 fn draw_digit(canvas: &mut Canvas<'_>, x: i32, y: i32, digit: u8, scale: i32, color: Color) {
     const SEGMENTS: [u8; 10] = [
-        0b0111_0111,
-        0b0010_0100,
-        0b0101_1101,
+        0b0011_1111,
+        0b0000_0110,
+        0b0101_1011,
+        0b0100_1111,
+        0b0110_0110,
         0b0110_1101,
-        0b0010_1110,
-        0b0110_1011,
-        0b0111_1011,
-        0b0010_0101,
+        0b0111_1101,
+        0b0000_0111,
         0b0111_1111,
         0b0110_1111,
     ];

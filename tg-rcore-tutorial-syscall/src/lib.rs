@@ -11,6 +11,7 @@ compile_error!("You can only use one of `supervisor` or `user` features at a tim
 
 mod fs;
 mod io;
+mod platform;
 mod time;
 
 include!(concat!(env!("OUT_DIR"), "/syscalls.rs"));
@@ -18,6 +19,7 @@ include!(concat!(env!("OUT_DIR"), "/syscalls.rs"));
 
 pub use fs::*;
 pub use io::*;
+pub use platform::*;
 pub use tg_signal_defs::{SignalAction, SignalNo, MAX_SIG};
 pub use time::*;
 

@@ -2,54 +2,24 @@ use alloc::alloc::handle_alloc_error;
 use core::{
     alloc::{GlobalAlloc, Layout},
     cell::UnsafeCell,
-    ptr::NonNull,
+    sync::atomic::{AtomicUsize, Ordering},
 };
-use customizable_buddy::{BuddyAllocator, LinkedListBuddy, UsizeBuddy};
 
-/// 初始化用户态全局分配器。
-///
-/// 教学说明：用户程序同样需要 `alloc` 支持，因此也要在启动时初始化一个小堆。
-struct StaticCell<T> {
-    inner: UnsafeCell<T>,
-}
+/// 图形应用会长期持有一块 frame buffer，因此这里直接使用一个简单稳定的 bump heap。
+const HEAP_BYTES: usize = 512 << 10;
 
-unsafe impl<T> Sync for StaticCell<T> {}
+#[repr(align(16))]
+struct AlignedHeap([u8; HEAP_BYTES]);
 
-impl<T> StaticCell<T> {
-    const fn new(value: T) -> Self {
-        Self {
-            inner: UnsafeCell::new(value),
-        }
-    }
+struct HeapSpace(UnsafeCell<AlignedHeap>);
 
-    #[inline]
-    fn get(&self) -> *mut T {
-        self.inner.get()
-    }
-}
+unsafe impl Sync for HeapSpace {}
+
+static HEAP_SPACE: HeapSpace = HeapSpace(UnsafeCell::new(AlignedHeap([0; HEAP_BYTES])));
+static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 pub fn init() {
-    // 托管空间 16 KiB
-    const MEMORY_SIZE: usize = 16 << 10;
-    static MEMORY: StaticCell<[u8; MEMORY_SIZE]> = StaticCell::new([0u8; MEMORY_SIZE]);
-    unsafe {
-        heap_mut().init(
-            core::mem::size_of::<usize>().trailing_zeros() as _,
-            NonNull::new((*MEMORY.get()).as_mut_ptr()).unwrap(),
-        );
-        heap_mut().transfer(
-            NonNull::new_unchecked((*MEMORY.get()).as_mut_ptr()),
-            MEMORY_SIZE,
-        );
-    }
-}
-
-type MutAllocator<const N: usize> = BuddyAllocator<N, UsizeBuddy, LinkedListBuddy>;
-static HEAP: StaticCell<MutAllocator<32>> = StaticCell::new(MutAllocator::new());
-
-#[inline]
-fn heap_mut() -> &'static mut MutAllocator<32> {
-    unsafe { &mut *HEAP.get() }
+    NEXT.store(0, Ordering::SeqCst);
 }
 
 struct Global;
@@ -58,18 +28,25 @@ struct Global;
 static GLOBAL: Global = Global;
 
 unsafe impl GlobalAlloc for Global {
-    #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // 分配失败直接走 Rust 统一错误处理（通常会 panic）。
-        if let Ok((ptr, _)) = heap_mut().allocate_layout::<u8>(layout) {
-            ptr.as_ptr()
-        } else {
-            handle_alloc_error(layout)
+        let align = layout.align().max(1);
+        let size = layout.size();
+        let mut current = NEXT.load(Ordering::Relaxed);
+        loop {
+            let aligned = (current + align - 1) & !(align - 1);
+            let next = aligned.saturating_add(size);
+            if next > HEAP_BYTES {
+                handle_alloc_error(layout);
+            }
+            match NEXT.compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => {
+                    let base = unsafe { (*HEAP_SPACE.0.get()).0.as_mut_ptr() as usize };
+                    return (base + aligned) as *mut u8;
+                }
+                Err(observed) => current = observed,
+            }
         }
     }
 
-    #[inline]
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { heap_mut().deallocate_layout(NonNull::new(ptr).unwrap(), layout) }
-    }
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
 }

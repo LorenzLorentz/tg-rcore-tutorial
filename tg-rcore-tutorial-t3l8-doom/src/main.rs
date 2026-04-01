@@ -48,6 +48,8 @@
 
 /// 文件系统模块：easy-fs 封装 + 统一 Fd 枚举
 mod fs;
+/// 图形/输入平台模块：VirtIO-GPU 与 VirtIO-Input
+mod platform;
 /// 进程与线程模块：Process（资源容器）和 Thread（执行单元）
 mod process;
 /// 处理器模块：PROCESSOR 全局管理器（PThreadManager）
@@ -158,7 +160,11 @@ impl KernelSpace {
 static KERNEL_SPACE: KernelSpace = KernelSpace::new();
 
 /// VirtIO MMIO 设备地址范围
-pub const MMIO: &[(usize, usize)] = &[(0x1000_1000, 0x00_1000)];
+pub const MMIO: &[(usize, usize)] = &[
+    (0x1000_1000, 0x00_1000),
+    (platform::VIRTIO_GPU_MMIO_BASE, 0x00_1000),
+    (platform::VIRTIO_INPUT_MMIO_BASE, 0x00_1000),
+];
 
 /// 内核主函数
 ///
@@ -200,6 +206,8 @@ extern "C" fn rust_main() -> ! {
     tg_syscall::init_signal(&SyscallContext);
     tg_syscall::init_thread(&SyscallContext); // 本章新增：线程系统调用
     tg_syscall::init_sync_mutex(&SyscallContext); // 本章新增：同步原语系统调用
+    tg_syscall::init_platform(&SyscallContext);
+    platform::init();
     // 步骤 8：加载 initproc（返回 Process + Thread）
     let initproc = read_all(FS.open("initproc", OpenFlags::RDONLY).unwrap());
     if let Some((process, thread)) = Process::from_elf(ElfFile::new(initproc.as_slice()).unwrap()) {
@@ -349,6 +357,7 @@ mod impls {
     use crate::{
         PROCESSOR, Sv39, Thread, build_flags,
         fs::{FS, Fd, read_all},
+        platform as hw_platform,
         processor::ProcessorInner,
     };
     use alloc::sync::Arc;
@@ -442,6 +451,34 @@ mod impls {
     pub struct SyscallContext;
     const READABLE: VmFlags<Sv39> = build_flags("RV");
     const WRITEABLE: VmFlags<Sv39> = build_flags("W_V");
+
+    fn copy_user_pixels(
+        current: &crate::process::Process,
+        addr: usize,
+        pixel_count: usize,
+    ) -> Option<Vec<u32>> {
+        let byte_len = pixel_count.checked_mul(core::mem::size_of::<u32>())?;
+        let mut pixels = vec![0u32; pixel_count];
+        let mut copied = 0usize;
+        let page_mask = (1 << Sv39::PAGE_BITS) - 1;
+        while copied < byte_len {
+            let vaddr = addr + copied;
+            let page_offset = vaddr & page_mask;
+            let chunk_len = core::cmp::min(byte_len - copied, (1 << Sv39::PAGE_BITS) - page_offset);
+            let src = current
+                .address_space
+                .translate::<u8>(VAddr::new(vaddr), READABLE)?;
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    src.as_ptr(),
+                    (pixels.as_mut_ptr() as *mut u8).add(copied),
+                    chunk_len,
+                );
+            }
+            copied += chunk_len;
+        }
+        Some(pixels)
+    }
 
     /// IO 系统调用（与第七章基本相同）
     ///
@@ -696,6 +733,58 @@ mod impls {
                     }
                 }
                 _ => -1,
+            }
+        }
+    }
+
+    impl Platform for SyscallContext {
+        fn framebuffer_getinfo(&self, _caller: Caller, info: usize) -> isize {
+            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
+            match (
+                current
+                    .address_space
+                    .translate::<FramebufferInfo>(VAddr::new(info), WRITEABLE),
+                hw_platform::framebuffer_info(),
+            ) {
+                (Some(mut ptr), Some(info)) => {
+                    unsafe { *ptr.as_mut() = info };
+                    0
+                }
+                _ => -1,
+            }
+        }
+
+        fn framebuffer_present(
+            &self,
+            _caller: Caller,
+            pixels: usize,
+            width: usize,
+            height: usize,
+        ) -> isize {
+            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
+            let pixel_count = match width.checked_mul(height) {
+                Some(pixel_count) if pixel_count > 0 && pixel_count <= 640 * 400 => pixel_count,
+                _ => return -1,
+            };
+            copy_user_pixels(current, pixels, pixel_count).map_or(-1, |pixels| {
+                hw_platform::present_bgra8888(&pixels, width, height)
+            })
+        }
+
+        fn input_poll(&self, _caller: Caller, event: usize) -> isize {
+            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
+            match current
+                .address_space
+                .translate::<InputEvent>(VAddr::new(event), WRITEABLE)
+            {
+                Some(mut ptr) => match hw_platform::poll_input() {
+                    Some(event) => {
+                        unsafe { *ptr.as_mut() = event };
+                        1
+                    }
+                    None => 0,
+                },
+                None => -1,
             }
         }
     }

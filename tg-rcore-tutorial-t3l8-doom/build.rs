@@ -74,6 +74,10 @@ fn build_apps_and_pack_fs() {
         "cargo:rerun-if-changed={}",
         tg_user_root.join("src").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        tg_user_root.join("assets").display()
+    );
 
     let cfg = fs::read_to_string(&cases_path).unwrap_or_else(|err| {
         panic!(
@@ -111,7 +115,13 @@ fn build_apps_and_pack_fs() {
         build_user_app(&tg_user_root, name, base_address);
     }
 
-    easy_fs_pack(&names, &app_target_dir, &fs_target_dir).unwrap_or_else(|err| {
+    easy_fs_pack(
+        &names,
+        &app_target_dir,
+        &fs_target_dir,
+        &tg_user_root.join("assets"),
+    )
+    .unwrap_or_else(|err| {
         panic!(
             "failed to pack easy-fs image in {}: {err}",
             fs_target_dir.display()
@@ -167,6 +177,7 @@ fn easy_fs_pack(
     cases: &[String],
     app_target: &PathBuf,
     fs_target: &PathBuf,
+    asset_root: &PathBuf,
 ) -> std::io::Result<()> {
     use std::fs::OpenOptions;
     use std::io::Read;
@@ -194,6 +205,22 @@ fn easy_fs_pack(
         host_file.read_to_end(&mut all_data).unwrap();
         let inode = root_inode.create(case.as_str()).unwrap();
         inode.write_at(0, all_data.as_slice());
+    }
+
+    if asset_root.exists() {
+        for entry in fs::read_dir(asset_root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let mut host_file = std::fs::File::open(entry.path())?;
+            let mut all_data: Vec<u8> = Vec::new();
+            host_file.read_to_end(&mut all_data)?;
+            let inode = root_inode.create(name.as_ref()).unwrap();
+            inode.write_at(0, all_data.as_slice());
+        }
     }
 
     Ok(())

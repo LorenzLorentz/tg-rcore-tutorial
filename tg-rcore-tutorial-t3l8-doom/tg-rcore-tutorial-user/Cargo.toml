@@ -334,6 +334,10 @@ path = "src/bin/threads_arg.rs"
 name = "user_shell"
 path = "src/bin/user_shell.rs"
 
+[[bin]]
+name = "doom"
+path = "src/bin/doom.rs"
+
 [dependencies.customizable-buddy]
 version = "0.0.2"
 
@@ -342,6 +346,7 @@ version = "0.4.8"
 package = "tg-rcore-tutorial-console"
 
 [dependencies.tg-syscall]
+path = "../../tg-rcore-tutorial-syscall"
 version = "0.4.8"
 features = ["user"]
 package = "tg-rcore-tutorial-syscall"

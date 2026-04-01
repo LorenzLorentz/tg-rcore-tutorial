@@ -185,6 +185,26 @@ impl FileHandle {
             -1
         }
     }
+
+    /// 调整文件偏移，返回新的偏移位置。
+    pub fn seek(&self, offset: isize, whence: usize) -> isize {
+        let Some(inode) = &self.inode else {
+            return -1;
+        };
+        let base = match whence {
+            0 => 0usize,
+            1 => self.offset.get(),
+            2 => inode.size(),
+            _ => return -1,
+        };
+        let new_offset = base as isize + offset;
+        if new_offset < 0 {
+            return -1;
+        }
+        let new_offset = new_offset as usize;
+        self.offset.set(new_offset);
+        new_offset as isize
+    }
 }
 
 /// 文件系统管理器 trait。

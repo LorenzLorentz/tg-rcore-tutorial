@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::{collections::HashMap, env, fs, path::PathBuf, process::Command};
 
 const TARGET_ARCH: &str = "riscv64gc-unknown-none-elf";
+const BUNDLED_USER_MANIFEST: &str = "Cargo.user.toml";
 
 #[derive(Deserialize, Default)]
 struct Cases {
@@ -63,12 +64,11 @@ fn is_packaged_build() -> bool {
 
 fn build_apps() {
     let tg_user_root = ensure_tg_user();
+    let tg_user_manifest = resolve_user_manifest(&tg_user_root)
+        .unwrap_or_else(|| panic!("no user manifest found under {}", tg_user_root.display()));
     let cases_path = tg_user_root.join("cases.toml");
     println!("cargo:rerun-if-changed={}", cases_path.display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        tg_user_root.join("Cargo.toml").display()
-    );
+    println!("cargo:rerun-if-changed={}", tg_user_manifest.display());
     emit_rerun_if_changed_recursive(&tg_user_root.join("src"));
 
     let cfg = fs::read_to_string(&cases_path).unwrap_or_else(|err| {
@@ -135,11 +135,13 @@ fn emit_rerun_if_changed_recursive(path: &PathBuf) {
 }
 
 fn build_user_app(tg_user_root: &PathBuf, name: &str, base_address: u64) {
+    let tg_user_manifest = resolve_user_manifest(tg_user_root)
+        .unwrap_or_else(|| panic!("no user manifest found under {}", tg_user_root.display()));
     let mut cmd = Command::new("cargo");
     cmd.args([
         "build",
         "--manifest-path",
-        tg_user_root.join("Cargo.toml").to_string_lossy().as_ref(),
+        tg_user_manifest.to_string_lossy().as_ref(),
         "--bin",
         name,
         "--target",
@@ -261,7 +263,7 @@ fn ensure_tg_user() -> PathBuf {
     // 优先使用 TG_USER_DIR 显式指定的目录
     if let Ok(dir) = env::var("TG_USER_DIR") {
         let path = PathBuf::from(dir);
-        if path.join("Cargo.toml").exists() {
+        if resolve_user_manifest(&path).is_some() {
             return path;
         }
     }
@@ -278,8 +280,8 @@ fn ensure_tg_user() -> PathBuf {
     let tg_user_dir = manifest_dir.join(&local_dir_name);
 
     // 本地缓存目录已存在则直接使用
-    if tg_user_dir.join("Cargo.toml").exists() {
-        ensure_workspace_table(&tg_user_dir);
+    if let Some(manifest) = resolve_user_manifest(&tg_user_dir) {
+        ensure_workspace_table_if_needed(&manifest);
         return tg_user_dir;
     }
 
@@ -302,27 +304,39 @@ fn ensure_tg_user() -> PathBuf {
         );
     }
 
-    if !tg_user_dir.join("Cargo.toml").exists() {
+    let Some(manifest) = resolve_user_manifest(&tg_user_dir) else {
         panic!(
             "{crate_spec} clone did not produce a valid crate at {}",
             tg_user_dir.display()
         );
-    }
+    };
 
     // 克隆后补加 [workspace]，防止父 workspace 将其识别为非成员而报错
-    ensure_workspace_table(&tg_user_dir);
+    ensure_workspace_table_if_needed(&manifest);
 
     tg_user_dir
 }
 
+fn resolve_user_manifest(dir: &PathBuf) -> Option<PathBuf> {
+    let bundled = dir.join(BUNDLED_USER_MANIFEST);
+    if bundled.exists() {
+        return Some(bundled);
+    }
+    let default = dir.join("Cargo.toml");
+    default.exists().then_some(default)
+}
+
 /// 若 Cargo.toml 末尾尚无 [workspace] 表，则追加一个空的，
 /// 使该 crate 成为独立 workspace 根，避免父 workspace 冲突。
-fn ensure_workspace_table(dir: &PathBuf) {
-    let cargo_toml = dir.join("Cargo.toml");
-    let content = fs::read_to_string(&cargo_toml).unwrap_or_default();
+fn ensure_workspace_table_if_needed(cargo_toml: &PathBuf) {
+    if cargo_toml.file_name().and_then(|name| name.to_str()) != Some("Cargo.toml") {
+        return;
+    }
+
+    let content = fs::read_to_string(cargo_toml).unwrap_or_default();
     if !content.contains("[workspace]") {
         fs::write(
-            &cargo_toml,
+            cargo_toml,
             format!(
                 "{}
 [workspace]
@@ -330,6 +344,12 @@ fn ensure_workspace_table(dir: &PathBuf) {
                 content
             ),
         )
-        .unwrap_or_else(|err| panic!("failed to patch Cargo.toml in {}: {}", dir.display(), err));
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to patch Cargo.toml in {}: {}",
+                cargo_toml.display(),
+                err
+            )
+        });
     }
 }

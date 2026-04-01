@@ -45,6 +45,9 @@ pub trait IO: Sync {
     fn write(&self, caller: Caller, fd: usize, buf: usize, count: usize) -> isize {
         unimplemented!()
     }
+    fn lseek(&self, caller: Caller, fd: usize, offset: isize, whence: usize) -> isize {
+        unimplemented!()
+    }
     fn open(&self, caller: Caller, path: usize, flags: usize) -> isize {
         unimplemented!()
     }
@@ -267,6 +270,7 @@ pub fn handle(caller: Caller, id: SyscallId, args: [usize; 6]) -> SyscallResult 
     match id {
         Id::WRITE => IO.call(id, |io| io.write(caller, args[0], args[1], args[2])),
         Id::READ => IO.call(id, |io| io.read(caller, args[0], args[1], args[2])),
+        Id::LSEEK => IO.call(id, |io| io.lseek(caller, args[0], args[1] as isize, args[2])),
         Id::OPENAT => IO.call(id, |io| io.open(caller, args[0], args[1])),
         Id::CLOSE => IO.call(id, |io| io.close(caller, args[0])),
         Id::LINKAT => IO.call(id, |io| {

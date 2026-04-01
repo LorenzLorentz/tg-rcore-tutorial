@@ -257,6 +257,12 @@ impl Inode {
         self.read_disk_inode(|disk_inode| disk_inode.read_at(offset, buf, &self.block_device))
     }
 
+    /// 返回当前 inode 的逻辑大小（字节）。
+    pub fn size(&self) -> usize {
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| disk_inode.size as usize)
+    }
+
     /// Write data to current inode
     pub fn write_at(&self, offset: usize, buf: &[u8]) -> usize {
         let mut fs = self.fs.lock();

@@ -66,6 +66,7 @@ extern crate alloc;
 use crate::{
     fs::{FS, read_all},
     impls::{Sv39Manager, SyscallContext},
+    platform::{FRAMEBUFFER_GETINFO_SYSCALL, FRAMEBUFFER_PRESENT_SYSCALL, INPUT_POLL_SYSCALL},
     process::{Process, Thread},
     processor::{ProcManager, ProcessorInner, ThreadManager},
 };
@@ -206,7 +207,6 @@ extern "C" fn rust_main() -> ! {
     tg_syscall::init_signal(&SyscallContext);
     tg_syscall::init_thread(&SyscallContext); // 本章新增：线程系统调用
     tg_syscall::init_sync_mutex(&SyscallContext); // 本章新增：同步原语系统调用
-    tg_syscall::init_platform(&SyscallContext);
     platform::init();
     // 步骤 8：加载 initproc（返回 Process + Thread）
     let initproc = read_all(FS.open("initproc", OpenFlags::RDONLY).unwrap());
@@ -233,9 +233,23 @@ extern "C" fn rust_main() -> ! {
                     use tg_syscall::{SyscallId as Id, SyscallResult as Ret};
                     let ctx = &mut task.context.context;
                     ctx.move_next();
-                    let id: Id = ctx.a(7).into();
+                    let raw_id = ctx.a(7);
+                    let id: Id = raw_id.into();
                     let args = [ctx.a(0), ctx.a(1), ctx.a(2), ctx.a(3), ctx.a(4), ctx.a(5)];
-                    let syscall_ret = tg_syscall::handle(Caller { entity: 0, flow: 0 }, id, args);
+                    let caller = Caller { entity: 0, flow: 0 };
+                    let syscall_ret = match raw_id {
+                        x if x == Id::LSEEK.0 => {
+                            Ret::Done(SyscallContext::lseek_impl(args[0], args[1] as isize, args[2]))
+                        }
+                        FRAMEBUFFER_GETINFO_SYSCALL => {
+                            Ret::Done(SyscallContext::framebuffer_getinfo_impl(args[0]))
+                        }
+                        FRAMEBUFFER_PRESENT_SYSCALL => Ret::Done(
+                            SyscallContext::framebuffer_present_impl(args[0], args[1], args[2]),
+                        ),
+                        INPUT_POLL_SYSCALL => Ret::Done(SyscallContext::input_poll_impl(args[0])),
+                        _ => tg_syscall::handle(caller, id, args),
+                    };
 
                     // ─── 信号处理 ───
                     let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
@@ -274,7 +288,17 @@ extern "C" fn rust_main() -> ! {
                     }
                 }
                 e => {
-                    log::error!("unsupported trap: {e:?}");
+                    let ctx = &task.context.context;
+                    log::error!(
+                        "unsupported trap: {e:?}, sepc={:#x}, stval={:#x}, ra={:#x}, sp={:#x}, a0={:#x}, a1={:#x}, a2={:#x}",
+                        sepc::read(),
+                        stval::read(),
+                        ctx.ra(),
+                        ctx.sp(),
+                        ctx.a(0),
+                        ctx.a(1),
+                        ctx.a(2)
+                    );
                     unsafe { (*processor).make_current_exited(-3) };
                 }
             }
@@ -358,6 +382,7 @@ mod impls {
         PROCESSOR, Sv39, Thread, build_flags,
         fs::{FS, Fd, read_all},
         platform as hw_platform,
+        platform::{FramebufferInfo, InputEvent},
         processor::ProcessorInner,
     };
     use alloc::sync::Arc;
@@ -480,28 +505,104 @@ mod impls {
         Some(pixels)
     }
 
+    fn translate_user_buffer(
+        current: &crate::process::Process,
+        addr: usize,
+        len: usize,
+        flags: VmFlags<Sv39>,
+    ) -> Option<Vec<&'static mut [u8]>> {
+        let mut buffers = Vec::new();
+        let mut copied = 0usize;
+        let page_mask = (1 << Sv39::PAGE_BITS) - 1;
+
+        while copied < len {
+            let vaddr = addr + copied;
+            let page_offset = vaddr & page_mask;
+            let chunk_len = core::cmp::min(len - copied, (1 << Sv39::PAGE_BITS) - page_offset);
+            let ptr = current.address_space.translate::<u8>(VAddr::new(vaddr), flags)?;
+            unsafe {
+                buffers.push(core::slice::from_raw_parts_mut(ptr.as_ptr(), chunk_len));
+            }
+            copied += chunk_len;
+        }
+
+        Some(buffers)
+    }
+
     /// IO 系统调用（与第七章基本相同）
     ///
     /// 注意：本章通过 `get_current_proc()` 获取当前线程所属的进程，
     /// 而非直接 `current()`，因为 fd_table 属于进程而非线程。
+    impl SyscallContext {
+        pub(super) fn lseek_impl(fd: usize, offset: isize, whence: usize) -> isize {
+            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
+            current
+                .fd_table
+                .get(fd)
+                .and_then(|slot| slot.as_ref())
+                .map_or(-1, |file| file.lock().seek(offset, whence))
+        }
+
+        pub(super) fn framebuffer_getinfo_impl(info: usize) -> isize {
+            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
+            match (
+                current
+                    .address_space
+                    .translate::<FramebufferInfo>(VAddr::new(info), WRITEABLE),
+                hw_platform::framebuffer_info(),
+            ) {
+                (Some(mut ptr), Some(info)) => {
+                    unsafe { *ptr.as_mut() = info };
+                    0
+                }
+                _ => -1,
+            }
+        }
+
+        pub(super) fn framebuffer_present_impl(pixels: usize, width: usize, height: usize) -> isize {
+            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
+            let pixel_count = match width.checked_mul(height) {
+                Some(pixel_count) if pixel_count > 0 && pixel_count <= 640 * 400 => pixel_count,
+                _ => return -1,
+            };
+            copy_user_pixels(current, pixels, pixel_count).map_or(-1, |pixels| {
+                hw_platform::present_bgra8888(&pixels, width, height)
+            })
+        }
+
+        pub(super) fn input_poll_impl(event: usize) -> isize {
+            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
+            match current
+                .address_space
+                .translate::<InputEvent>(VAddr::new(event), WRITEABLE)
+            {
+                Some(mut ptr) => match hw_platform::poll_input() {
+                    Some(event) => {
+                        unsafe { *ptr.as_mut() = event };
+                        1
+                    }
+                    None => 0,
+                },
+                None => -1,
+            }
+        }
+    }
+
     impl IO for SyscallContext {
         fn write(&self, _caller: Caller, fd: usize, buf: usize, count: usize) -> isize {
             let current = PROCESSOR.get_mut().get_current_proc().unwrap();
-            if let Some(ptr) = current.address_space.translate(VAddr::new(buf), READABLE) {
+            if let Some(buffers) = translate_user_buffer(current, buf, count, READABLE) {
                 if fd == STDOUT || fd == STDDEBUG {
-                    print!("{}", unsafe {
-                        core::str::from_utf8_unchecked(core::slice::from_raw_parts(
-                            ptr.as_ptr(),
-                            count,
-                        ))
-                    });
+                    for chunk in buffers {
+                        print!("{}", unsafe {
+                            core::str::from_utf8_unchecked(&chunk)
+                        });
+                    }
                     count as _
-                } else if let Some(file) = &current.fd_table[fd] {
+                } else if let Some(file) = current.fd_table.get(fd).and_then(|slot| slot.as_ref()) {
                     let file = file.lock();
                     if file.writable() {
-                        let mut v: Vec<&'static mut [u8]> = Vec::new();
-                        unsafe { v.push(core::slice::from_raw_parts_mut(ptr.as_ptr(), count)) };
-                        file.write(UserBuffer::new(v)) as _
+                        file.write(UserBuffer::new(buffers)) as _
                     } else {
                         log::error!("file not writable");
                         -1
@@ -518,22 +619,18 @@ mod impls {
 
         fn read(&self, _caller: Caller, fd: usize, buf: usize, count: usize) -> isize {
             let current = PROCESSOR.get_mut().get_current_proc().unwrap();
-            if let Some(ptr) = current.address_space.translate(VAddr::new(buf), WRITEABLE) {
+            if let Some(mut buffers) = translate_user_buffer(current, buf, count, WRITEABLE) {
                 if fd == STDIN {
-                    let mut ptr = ptr.as_ptr();
-                    for _ in 0..count {
-                        unsafe {
-                            *ptr = tg_sbi::console_getchar() as u8;
-                            ptr = ptr.add(1);
+                    for slice in &mut buffers {
+                        for byte in slice.iter_mut() {
+                            *byte = tg_sbi::console_getchar() as u8;
                         }
                     }
                     count as _
-                } else if let Some(file) = &current.fd_table[fd] {
+                } else if let Some(file) = current.fd_table.get(fd).and_then(|slot| slot.as_ref()) {
                     let file = file.lock();
                     if file.readable() {
-                        let mut v: Vec<&'static mut [u8]> = Vec::new();
-                        unsafe { v.push(core::slice::from_raw_parts_mut(ptr.as_ptr(), count)) };
-                        file.read(UserBuffer::new(v)) as _
+                        file.read(UserBuffer::new(buffers)) as _
                     } else {
                         log::error!("file not readable");
                         -1
@@ -699,6 +796,11 @@ mod impls {
                 .pid
                 .get_usize() as _
         }
+
+        fn sbrk(&self, _caller: Caller, size: i32) -> isize {
+            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
+            current.change_program_brk(size as isize).map_or(-1, |old| old as isize)
+        }
     }
 
     impl Scheduling for SyscallContext {
@@ -733,58 +835,6 @@ mod impls {
                     }
                 }
                 _ => -1,
-            }
-        }
-    }
-
-    impl Platform for SyscallContext {
-        fn framebuffer_getinfo(&self, _caller: Caller, info: usize) -> isize {
-            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
-            match (
-                current
-                    .address_space
-                    .translate::<FramebufferInfo>(VAddr::new(info), WRITEABLE),
-                hw_platform::framebuffer_info(),
-            ) {
-                (Some(mut ptr), Some(info)) => {
-                    unsafe { *ptr.as_mut() = info };
-                    0
-                }
-                _ => -1,
-            }
-        }
-
-        fn framebuffer_present(
-            &self,
-            _caller: Caller,
-            pixels: usize,
-            width: usize,
-            height: usize,
-        ) -> isize {
-            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
-            let pixel_count = match width.checked_mul(height) {
-                Some(pixel_count) if pixel_count > 0 && pixel_count <= 640 * 400 => pixel_count,
-                _ => return -1,
-            };
-            copy_user_pixels(current, pixels, pixel_count).map_or(-1, |pixels| {
-                hw_platform::present_bgra8888(&pixels, width, height)
-            })
-        }
-
-        fn input_poll(&self, _caller: Caller, event: usize) -> isize {
-            let current = PROCESSOR.get_mut().get_current_proc().unwrap();
-            match current
-                .address_space
-                .translate::<InputEvent>(VAddr::new(event), WRITEABLE)
-            {
-                Some(mut ptr) => match hw_platform::poll_input() {
-                    Some(event) => {
-                        unsafe { *ptr.as_mut() = event };
-                        1
-                    }
-                    None => 0,
-                },
-                None => -1,
             }
         }
     }

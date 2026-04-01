@@ -8,9 +8,20 @@ license = "GPL-3.0"
 readme = "README.md"
 keywords = ["rcore", "tutorial", "no-std", "riscv", "pingpong"]
 categories = ["no-std", "embedded"]
-exclude = [
-    "tg-user/**",
-#    ".cargo/config.toml",
+include = [
+    ".cargo/config.toml",
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+    "build.rs",
+    "exercise.md",
+    "run-qemu.sh",
+    "rust-toolchain.toml",
+    "src/**",
+    "test.sh",
+    "tg-rcore-tutorial-user",
+    "tg-rcore-tutorial-user/**",
+    "!tg-rcore-tutorial-user/target/**",
 ]
 
 [features]
@@ -26,7 +37,7 @@ panic = "abort"
 xmas-elf = "0.8.0"
 riscv = "0.10.1"
 spin = "0.9"
-virtio-drivers = { path = "../vendor/virtio-drivers" }
+virtio-drivers = "0.1.0"
 
 tg-sbi = { package = "tg-rcore-tutorial-sbi", version = "0.4.8", features = ["nobios"] }
 tg-linker = { package = "tg-rcore-tutorial-linker", version = "0.4.8" }

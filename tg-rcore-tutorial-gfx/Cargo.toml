@@ -15,4 +15,4 @@ panic = "abort"
 panic = "abort"
 
 [dependencies]
-virtio-drivers = { path = "../vendor/virtio-drivers" }
+virtio-drivers = "0.1.0"

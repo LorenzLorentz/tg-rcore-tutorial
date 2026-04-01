@@ -5,11 +5,44 @@ use spin::Mutex;
 use tg_console::log;
 use tg_gfx::Display;
 use tg_kernel_vm::page_table::{MmuMeta, VAddr, VmFlags};
-use tg_syscall::{FramebufferInfo, InputEvent};
 use virtio_drivers::{Hal, MmioTransport, VirtIOHeader, VirtIOInput};
 
 pub(crate) const VIRTIO_GPU_MMIO_BASE: usize = 0x1000_2000;
 pub(crate) const VIRTIO_INPUT_MMIO_BASE: usize = 0x1000_3000;
+/// task3 Doom 使用的 framebuffer 信息查询 syscall 号。
+pub(crate) const FRAMEBUFFER_GETINFO_SYSCALL: usize = 5000;
+/// task3 Doom 使用的 framebuffer present syscall 号。
+pub(crate) const FRAMEBUFFER_PRESENT_SYSCALL: usize = 5001;
+/// task3 Doom 使用的输入轮询 syscall 号。
+pub(crate) const INPUT_POLL_SYSCALL: usize = 5002;
+/// BGRA8888 帧缓冲格式常量。
+pub(crate) const FRAMEBUFFER_FORMAT_BGRA8888: u32 = 1;
+
+/// 用户态可见的帧缓冲信息结构。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
+pub(crate) struct FramebufferInfo {
+    /// 帧缓冲宽度。
+    pub width: u32,
+    /// 帧缓冲高度。
+    pub height: u32,
+    /// 每行像素数。
+    pub stride: u32,
+    /// 像素格式。
+    pub format: u32,
+}
+
+/// 用户态可见的输入事件结构。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
+pub(crate) struct InputEvent {
+    /// 事件类型。
+    pub event_type: u16,
+    /// 按键码。
+    pub code: u16,
+    /// 事件值。
+    pub value: u32,
+}
 
 static DISPLAY: Mutex<Option<Display>> = Mutex::new(None);
 static INPUT: Mutex<Option<Keyboard>> = Mutex::new(None);
@@ -70,7 +103,7 @@ pub(crate) fn framebuffer_info() -> Option<FramebufferInfo> {
         width: display.width() as u32,
         height: display.height() as u32,
         stride: display.width() as u32,
-        format: tg_syscall::FRAMEBUFFER_FORMAT_BGRA8888,
+        format: FRAMEBUFFER_FORMAT_BGRA8888,
     })
 }
 
@@ -88,6 +121,7 @@ pub(crate) fn present_bgra8888(pixels: &[u32], width: usize, height: usize) -> i
 pub(crate) fn poll_input() -> Option<InputEvent> {
     let mut input = INPUT.lock();
     input.as_mut().and_then(|keyboard| {
+        keyboard.inner.ack_interrupt();
         keyboard.inner.pop_pending_event().map(|event| InputEvent {
             event_type: event.event_type,
             code: event.code,

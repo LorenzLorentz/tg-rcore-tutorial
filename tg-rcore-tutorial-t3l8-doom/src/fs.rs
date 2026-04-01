@@ -150,4 +150,12 @@ impl Fd {
             _ => -1,
         }
     }
+
+    /// 调整描述符偏移
+    pub fn seek(&self, offset: isize, whence: usize) -> isize {
+        match self {
+            Fd::File(f) => f.seek(offset, whence),
+            _ => -1,
+        }
+    }
 }

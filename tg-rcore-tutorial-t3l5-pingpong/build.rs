@@ -4,6 +4,20 @@ use std::{collections::HashMap, env, fs, path::PathBuf, process::Command};
 const TARGET_ARCH: &str = "riscv64gc-unknown-none-elf";
 const BUNDLED_USER_MANIFEST: &str = "Cargo.user.toml";
 
+struct PreparedUserManifest {
+    path: PathBuf,
+    rerun_path: PathBuf,
+    cleanup: bool,
+}
+
+impl Drop for PreparedUserManifest {
+    fn drop(&mut self) {
+        if self.cleanup {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
 #[derive(Deserialize, Default)]
 struct Cases {
     base: Option<u64>,
@@ -64,11 +78,14 @@ fn is_packaged_build() -> bool {
 
 fn build_apps() {
     let tg_user_root = ensure_tg_user();
-    let tg_user_manifest = resolve_user_manifest(&tg_user_root)
+    let tg_user_manifest = prepare_user_manifest(&tg_user_root)
         .unwrap_or_else(|| panic!("no user manifest found under {}", tg_user_root.display()));
     let cases_path = tg_user_root.join("cases.toml");
     println!("cargo:rerun-if-changed={}", cases_path.display());
-    println!("cargo:rerun-if-changed={}", tg_user_manifest.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        tg_user_manifest.rerun_path.display()
+    );
     emit_rerun_if_changed_recursive(&tg_user_root.join("src"));
 
     let cfg = fs::read_to_string(&cases_path).unwrap_or_else(|err| {
@@ -103,7 +120,7 @@ fn build_apps() {
 
     for (i, name) in names.iter().enumerate() {
         let base_address = base + i as u64 * step;
-        build_user_app(&tg_user_root, name, base_address);
+        build_user_app(&tg_user_manifest, name, base_address);
         let elf = target_dir.join(name);
         let app_path = if base_address != 0 {
             objcopy_to_bin(&elf)
@@ -134,14 +151,12 @@ fn emit_rerun_if_changed_recursive(path: &PathBuf) {
     }
 }
 
-fn build_user_app(tg_user_root: &PathBuf, name: &str, base_address: u64) {
-    let tg_user_manifest = resolve_user_manifest(tg_user_root)
-        .unwrap_or_else(|| panic!("no user manifest found under {}", tg_user_root.display()));
+fn build_user_app(tg_user_manifest: &PreparedUserManifest, name: &str, base_address: u64) {
     let mut cmd = Command::new("cargo");
     cmd.args([
         "build",
         "--manifest-path",
-        tg_user_manifest.to_string_lossy().as_ref(),
+        tg_user_manifest.path.to_string_lossy().as_ref(),
         "--bin",
         name,
         "--target",
@@ -263,7 +278,7 @@ fn ensure_tg_user() -> PathBuf {
     // 优先使用 TG_USER_DIR 显式指定的目录
     if let Ok(dir) = env::var("TG_USER_DIR") {
         let path = PathBuf::from(dir);
-        if resolve_user_manifest(&path).is_some() {
+        if has_user_manifest(&path) {
             return path;
         }
     }
@@ -317,13 +332,56 @@ fn ensure_tg_user() -> PathBuf {
     tg_user_dir
 }
 
-fn resolve_user_manifest(dir: &PathBuf) -> Option<PathBuf> {
+fn has_user_manifest(dir: &PathBuf) -> bool {
+    dir.join("Cargo.toml").exists() || dir.join(BUNDLED_USER_MANIFEST).exists()
+}
+
+fn prepare_user_manifest(dir: &PathBuf) -> Option<PreparedUserManifest> {
     let bundled = dir.join(BUNDLED_USER_MANIFEST);
     if bundled.exists() {
-        return Some(bundled);
+        let generated = dir.join("Cargo.toml");
+        let mut content = fs::read_to_string(&bundled)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", bundled.display()));
+        if !content.contains("[workspace]") {
+            if !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str("[workspace]\n");
+        }
+        let needs_write = fs::read_to_string(&generated)
+            .map(|current| current != content)
+            .unwrap_or(true);
+        if needs_write {
+            fs::write(&generated, content)
+                .unwrap_or_else(|err| panic!("failed to write {}: {err}", generated.display()));
+        }
+        return Some(PreparedUserManifest {
+            path: generated,
+            rerun_path: bundled,
+            cleanup: true,
+        });
     }
+
     let default = dir.join("Cargo.toml");
-    default.exists().then_some(default)
+    if default.exists() {
+        ensure_workspace_table_if_needed(&default);
+        return Some(PreparedUserManifest {
+            path: default.clone(),
+            rerun_path: default,
+            cleanup: false,
+        });
+    }
+
+    None
+}
+
+fn resolve_user_manifest(dir: &PathBuf) -> Option<PathBuf> {
+    let default = dir.join("Cargo.toml");
+    if default.exists() {
+        return Some(default);
+    }
+    let bundled = dir.join(BUNDLED_USER_MANIFEST);
+    bundled.exists().then_some(bundled)
 }
 
 /// 若 Cargo.toml 末尾尚无 [workspace] 表，则追加一个空的，

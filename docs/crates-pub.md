@@ -11,8 +11,8 @@
 | `wpj-tg-rcore-tutorial-gfx` | 已发布 `0.0.0` | 本次首次发布成功 |
 | `wpj-tg-rcore-tutorial-easy-fs` | 已发布 `0.0.1` | 本次从 `0.0.0` 更新到 `0.0.1` |
 | `wpj-tg-rcore-tutorial-t3l1-tangram` | 已发布 `0.0.0` | 本次首次发布成功 |
-| `wpj-tg-rcore-tutorial-t3l5-pingpong` | 已发布 `0.0.0` | 本次首次发布成功 |
-| `wpj-tg-rcore-tutorial-t3l8-doom` | 已发布 `0.0.0` | 本次首次发布成功 |
+| `wpj-tg-rcore-tutorial-t3l5-pingpong` | 已发布 `0.0.1` | 首发 `0.0.0` 后，本次补丁更新到 `0.0.1` |
+| `wpj-tg-rcore-tutorial-t3l8-doom` | 已发布 `0.0.1` | 首发 `0.0.0` 后，本次补丁更新到 `0.0.1` |
 
 ## 本次发布涉及的改动点
 
@@ -24,6 +24,7 @@
   - 这是 `t3l8-doom` 的文件偏移调整与 WAD 读取链路所必需的扩展。
 - `wpj-tg-rcore-tutorial-t3l5-pingpong`
   - 为 `virtio-drivers` 补上显式发布版本 `0.1.0`。
+  - `0.0.1` 额外修复了内嵌 `tg-rcore-tutorial-user` manifest 的构建回归：发布包继续保留 `Cargo.user.toml`，但本地构建时由 `build.rs` 临时生成真实的 `Cargo.toml`，从而恢复 `cargo build/run`。
 - `wpj-tg-rcore-tutorial-t3l8-doom`
   - 改为继续依赖官方 `tg-rcore-tutorial-syscall = 0.4.8`。
   - `LSEEK` 在本地内核 trap 分发中单独接管，不再依赖本地改过的 `tg-rcore-tutorial-syscall` path 版本。
@@ -31,6 +32,7 @@
   - `tg-easy-fs` 依赖切到 `wpj-tg-rcore-tutorial-easy-fs = 0.0.1`。
   - 为 `virtio-drivers` 和 `wpj-tg-rcore-tutorial-gfx` 补上显式版本。
   - 打包时显式包含 `capps/doom/**`、`doomgeneric/doomgeneric/**` 和包内 `tg-rcore-tutorial-user/assets/**`，避免 `cargo publish` 产物缺少 Doom 端口层和 `doom1.wad`。
+  - `0.0.1` 额外修复了与 `t3l5` 相同的内嵌 manifest 构建回归，同时继续保证打包结果包含 `doomgeneric/**` 和 `doom1.wad`。
 
 ## 为什么不发布 `tg-rcore-tutorial-syscall`
 
@@ -45,8 +47,8 @@
 | `wpj-tg-rcore-tutorial-gfx 0.0.0` | `virtio-drivers = 0.1.0` |
 | `wpj-tg-rcore-tutorial-easy-fs 0.0.1` | `spin`, `bitflags` |
 | `wpj-tg-rcore-tutorial-t3l1-tangram 0.0.0` | `tg-rcore-tutorial-sbi = 0.4.8`, `wpj-tg-rcore-tutorial-gfx = 0.0.0` |
-| `wpj-tg-rcore-tutorial-t3l5-pingpong 0.0.0` | `tg-rcore-tutorial-ch5` 同级依赖 + `virtio-drivers = 0.1.0` + `wpj-tg-rcore-tutorial-gfx = 0.0.0` |
-| `wpj-tg-rcore-tutorial-t3l8-doom 0.0.0` | `tg-rcore-tutorial-ch8` 同级依赖 + `virtio-drivers = 0.1.0` + `wpj-tg-rcore-tutorial-gfx = 0.0.0` + `wpj-tg-rcore-tutorial-easy-fs = 0.0.1` |
+| `wpj-tg-rcore-tutorial-t3l5-pingpong 0.0.1` | `tg-rcore-tutorial-ch5` 同级依赖 + `virtio-drivers = 0.1.0` + `wpj-tg-rcore-tutorial-gfx = 0.0.0` |
+| `wpj-tg-rcore-tutorial-t3l8-doom 0.0.1` | `tg-rcore-tutorial-ch8` 同级依赖 + `virtio-drivers = 0.1.0` + `wpj-tg-rcore-tutorial-gfx = 0.0.0` + `wpj-tg-rcore-tutorial-easy-fs = 0.0.1` |
 
 ## 实际发布顺序与结果
 
@@ -55,8 +57,10 @@
 3. `wpj-tg-rcore-tutorial-t3l1-tangram 0.0.0`
 4. `wpj-tg-rcore-tutorial-t3l5-pingpong 0.0.0`
 5. `wpj-tg-rcore-tutorial-t3l8-doom 0.0.0`
+6. `wpj-tg-rcore-tutorial-t3l5-pingpong 0.0.1`
+7. `wpj-tg-rcore-tutorial-t3l8-doom 0.0.1`
 
-上述 5 次发布均已成功完成，线上版本检查结果与本地预期一致。
+上述 7 次发布均已成功完成，线上版本检查结果与本地预期一致。
 
 ## 打包与发布注意事项
 

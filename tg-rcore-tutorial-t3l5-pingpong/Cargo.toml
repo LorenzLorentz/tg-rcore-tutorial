@@ -1,7 +1,7 @@
 [package]
 name = "wpj-tg-rcore-tutorial-t3l5-pingpong"
 description = "Task3 Lab5 pingpong game scaffold based on tg-rcore-tutorial ch5."
-version = "0.0.0"
+version = "0.0.1"
 edition = "2024"
 authors = ["OpenAI Codex"]
 license = "GPL-3.0"
@@ -21,6 +21,7 @@ include = [
     "test.sh",
     "tg-rcore-tutorial-user",
     "tg-rcore-tutorial-user/**",
+    "!tg-rcore-tutorial-user/Cargo.toml",
     "!tg-rcore-tutorial-user/target/**",
 ]
 

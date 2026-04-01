@@ -1,7 +1,7 @@
 [package]
 name = "wpj-tg-rcore-tutorial-t3l8-doom"
 description = "Task3 Lab8 Doom scaffold based on tg-rcore-tutorial ch8."
-version = "0.0.0"
+version = "0.0.1"
 edition = "2024"
 authors = ["OpenAI Codex"]
 license = "GPL-3.0"
@@ -25,6 +25,7 @@ include = [
     "!doomgeneric/screenshots/**",
     "tg-rcore-tutorial-user",
     "tg-rcore-tutorial-user/**",
+    "!tg-rcore-tutorial-user/Cargo.toml",
     "!tg-rcore-tutorial-user/target/**",
 ]
 

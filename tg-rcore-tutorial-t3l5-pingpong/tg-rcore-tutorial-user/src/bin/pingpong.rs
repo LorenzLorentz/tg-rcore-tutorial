@@ -11,6 +11,7 @@ use user_lib::{
 #[unsafe(no_mangle)]
 extern "C" fn main() -> i32 {
     println!("PingPong controls: left=W/S right=O/L restart=R quit=Q");
+    println!("PingPong window input: click the QEMU window before playing");
     if pingpong_attach_host() < 0 {
         println!("pingpong host attach failed");
         return 1;

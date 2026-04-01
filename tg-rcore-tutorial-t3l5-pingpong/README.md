@@ -6,15 +6,15 @@
 
 ### 快速运行
 
-本目录现在默认通过 [run-qemu.sh](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l5-pingpong/run-qemu.sh) 启动 `VirtIO-GPU + serial stdio`：
+本目录现在默认通过 [run-qemu.sh](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l5-pingpong/run-qemu.sh) 启动 `VirtIO-GPU + VirtIO keyboard + serial stdio`：
 
 - 图形模式：
   在仓库根目录执行
   `sh ~/rcore_docker.sh sh -lc 'cd tg-rcore-tutorial-t3l5-pingpong && cargo run'`
 - 无图形调试模式：
   `sh ~/rcore_docker.sh sh -lc 'cd tg-rcore-tutorial-t3l5-pingpong && TG_PINGPONG_HEADLESS=1 cargo run'`
-- 进入 shell 后运行：
-  `pingpong`
+- 默认会直接进入 `pingpong`，不需要再在 shell 里手输命令。
+- 游戏启动后请先点击 QEMU 图形窗口，再在窗口里按键；终端只用于输入 shell 命令。
 
 控制方式：
 
@@ -30,7 +30,7 @@
 建议把工作拆成四块：
 
 - 图形输出：给内核接入 `VirtIO-GPU + framebuffer`，让游戏能在屏幕上持续刷新 2D 场景。
-- 输入处理：复用现有 `STDIN -> console_getchar` 路径做按键输入，先跑通双人左右控制；如果体验不够，再考虑更稳定的键盘事件抽象。
+- 输入处理：接入 `VirtIO keyboard`，把窗口键盘事件直接送给游戏；无图形调试模式再回退到 `STDIN -> console_getchar`。
 - 用户态游戏组织：至少拆成两个用户态执行体，体现“多进程协作的双人乒乓”而不是单进程假装双人。
 - 内核支撑接口：在 `ch5` 的进程/地址空间框架内，为用户态提供访问 framebuffer 或提交绘制命令的方式。
 
@@ -76,7 +76,7 @@
 
 1. 先让本目录保持 `ch5` 基线可构建、可运行。
 2. 接入 `tg-rcore-tutorial-gfx`，先在内核里画一个静态球场界面。
-3. 接上 `STDIN` 输入，让单进程原型能控制两个拍子。
+3. 接上窗口键盘输入，让单进程原型能控制两个拍子。
 4. 再把游戏拆成双进程版本，体现 `ch5` 的实验主题。
 5. 最后再考虑分数、碰撞、重开局等完整玩法。
 

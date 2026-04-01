@@ -2,73 +2,166 @@
 
 本目录从 `tg-rcore-tutorial-ch8` 复制而来，作为 `ch8-doom` 的独立开发目录。基线内核能力仍然是 `ch8`：线程、同步原语、文件系统、信号、用户程序装载，以及你已经完成的死锁检测扩展。
 
+当前目录的 Doom 运行方式和普通 `ch8` 不同：请直接在本目录执行 `cargo run`，QEMU 会打开图形窗口，并通过 `VirtIO-GPU + VirtIO keyboard` 进入 Doom。若图形窗口没有焦点，键盘输入不会送到游戏里。
+
 ## Task3 开发说明
 
-### 1. 需要开发什么
+### 1. 当前目录现在是什么状态
 
-`ch8-doom` 不是简单做一个 2D 小游戏，而是要把 `doomgeneric` 这类现成用户态程序真正移植进来。站在当前基线上，开发任务至少包括：
+- 当前自写的 Doom 风格小游戏已经原样备份到：
+  `../tg-rcore-tutorial-t3l8-doom-naive`
+- 上游 `doomgeneric` 已经克隆到：
+  `./doomgeneric`
+- 当前 `cargo run` 走的是图形版 QEMU runner，会打开窗口并挂上 `VirtIO-GPU + VirtIO keyboard`。
 
-- 图形输出：内核侧接入 `VirtIO-GPU`，让 Doom 的软件渲染结果能写到屏幕。
-- 输入设备：给用户态提供稳定键盘输入，至少覆盖移动、转向、开火、菜单操作。
-- 用户态程序接入：把 `doomgeneric` 加入当前 `tg-rcore-tutorial-user` 的构建与打包流程，或者建立新的用户态构建链。
-- 系统接口对接：补齐 Doom 需要的时间、文件、显示刷新、输入轮询接口。
-- 资源装载：为 `doom1.wad` 或其他测试资源准备文件系统打包和加载方案。
+换句话说，这个目录现在同时保留了两条线：
 
-### 2. 如何使用当前图形组件
+1. 你已经写出来、可以运行的 naive 小游戏
+2. 后续真正移植 `doomgeneric` 的上游代码基
 
-当前图形组件 crate 仍然是：
+### 2. 我们当前已经实现了什么用户态生态
 
-- [tg-rcore-tutorial-gfx](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-gfx)
+这部分不是“想象中的能力”，而是已经在代码里存在、可以给 Doom 复用的基础设施。
 
-它现在更适合做的事情是：
+#### 2.1 用户程序构建与打包链
 
-- 在内核中初始化 `VirtIO-GPU`
-- 获得一块 framebuffer
-- 提供一个简单的软件绘制缓冲区
+- [build.rs](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/build.rs) 会编译本地 [tg-rcore-tutorial-user](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/tg-rcore-tutorial-user) 里的用户程序。
+- 同一个 `build.rs` 会把用户程序二进制和 `assets/` 目录中的资源一起打包进 `fs.img`。
+- 这意味着：程序文件和资源文件都已经有明确的镜像打包入口，后续 `doom1.wad` 也应该走这条链路，而不是临时手工塞进去。
 
-对 Doom 来说，推荐的使用方式不是直接拿 `Canvas` 去画三角形，而是把它当成**framebuffer backend**：
+#### 2.2 用户态运行时
 
-1. Doom 用户态程序生成一帧 320x200 或 640x400 的软件渲染像素
-2. 内核或共享缓冲层把这帧像素拷到 `tg-rcore-tutorial-gfx::Display` 管理的 framebuffer
-3. 调用 `present()` 提交到屏幕
+- 本地 [tg-rcore-tutorial-user/src/lib.rs](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/tg-rcore-tutorial-user/src/lib.rs) 已经提供了：
+  - `no_std` 用户态入口 `_start`
+  - 用户堆分配初始化
+  - `print!` / `println!`
+  - `get_time()`
+  - `sched_yield()`
+  - `open/read/close/exec/exit` 等系统调用重导出
+- 这说明：Rust 用户程序一侧的最小运行时已经有了，不需要从零再造一套“用户程序框架”。
 
-也就是说，`ch8-doom` 主要复用的是 `Display` 和 framebuffer 生命周期，不是 `Canvas` 的几何绘图 API。
+#### 2.3 屏幕与显示提交
 
-### 3. 当前图形组件需要哪些扩展
+- 内核侧 [src/platform.rs](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/src/platform.rs) 已经初始化 `VirtIO-GPU`，并维护一个 framebuffer backend。
+- 系统调用层已经暴露：
+  - [framebuffer_get_info](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-syscall/src/user.rs#L345)
+  - [framebuffer_present](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-syscall/src/user.rs#L351)
+- 内核在 [src/main.rs](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/src/main.rs#L741) 里已经把这两个调用接到了硬件平台上，并接受 BGRA8888 像素帧。
+- 当前 naive 版 `doom.rs` 已经实际使用了这条路径，所以“用户态生成一帧像素并提交到屏幕”这件事已经被验证过。
 
-为了支持 Doom，当前图形组件大概率要继续扩展，至少包括：
+#### 2.4 键盘输入
 
-- 支持外部像素缓冲上传，而不只是由 `Canvas` 原地作画。
-- 支持分辨率协商、缩放或 letterbox，让低分辨率 Doom 帧能正确显示到实际屏幕。
-- 支持更高效的整帧刷新路径，避免过多中间拷贝。
-- 解耦当前固定的 HAL / DMA 假设，使其能稳定工作在 `ch8` 的内核堆和地址空间环境里。
-- 为后续输入设备支持留接口，例如把显示和输入都统一到一个更通用的 `tg-rcore-tutorial-graphics`/`platform` 层。
+- 内核侧 [src/platform.rs](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/src/platform.rs) 已经初始化 `VirtIO keyboard`。
+- 系统调用层已经暴露 [input_poll](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-syscall/src/user.rs#L364)。
+- 共享输入事件结构在 [tg-rcore-tutorial-syscall/src/platform.rs](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-syscall/src/platform.rs) 里，按键码采用 Linux evdev 风格。
+- 当前 naive 版 `doom.rs` 已经证明这条输入链路能跑连续图形程序，而不是只有 UART shell 那种单字符输入。
 
-### 4. 除图形组件外，`ch8-doom` 还需要补什么
+#### 2.5 文件系统与资源读取
 
-图形不是最大难点，真正的重活还在这些地方：
+- 用户态已经能通过 `open/read/close` 从 `fs.img` 里读资源文件。
+- 当前 naive 版 `doom.rs` 通过读取 `doom_level.txt` 跑起来，说明“游戏程序 + 镜像资源”这条文件访问路径已经通了。
+- 因此，未来的 `doom1.wad` 本质上是把资源文件从 `doom_level.txt` 换成更大的 WAD 文件，而不是另起炉灶。
 
-- 输入：当前仓库主要是 `STDIN -> console_getchar` 风格接口，不够支撑 Doom 的连续键控体验。
-- 构建链：当前 [tg-rcore-tutorial-user](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-user) 主要面向 Rust 用户程序，不是现成给 C 项目直接塞进来的。
-- 文件系统资源：需要把 `wad` 文件和可执行程序一起纳入 `fs.img`。
-- 运行时抽象：`doomgeneric` 需要一层 `DG_*` 平台适配，把时间、按键、屏幕刷新对接到你的内核接口。
+#### 2.6 启动路径
 
-### 5. 建议的实现顺序
+- [initproc.rs](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/tg-rcore-tutorial-user/src/bin/initproc.rs) 已经优先 `exec("doom")`。
+- 也就是说，这个目录已经具备“开机直接进游戏”的启动组织方式。
 
-推荐按这个顺序推进：
+### 3. 把真正的 Doom 接进来还需要做什么
 
-1. 先在 `ch8` 基线上接入 `VirtIO-GPU`，跑一个静态 framebuffer demo。
-2. 再补键盘输入抽象，先跑一个最小交互图形程序。
-3. 然后实现“用户态画面缓冲 -> framebuffer -> present”的整帧刷新路径。
-4. 最后再移植 `doomgeneric`，逐个打通 `DG_Init`、`DG_DrawFrame`、`DG_GetKey`、`DG_GetTicksMs`、文件访问。
+这里说的“真正的 Doom”指的是：保留上游 `doomgeneric` 源码，接入真实 `doom1.wad`，而不是继续扩写当前自写小游戏。
 
-### 6. 这个目录和原 `ch8` 的关系
+#### 3.1 不建议先把 C 源码整份转写成 Rust
+
+默认建议是：**不要先做 Rust 转写**。
+
+更现实的路线是：
+
+1. 保留 `doomgeneric` 的 C 源码
+2. 为当前 OS 写一个新的平台文件，例如 `doomgeneric_rcore.c`
+3. 把这个 C 程序编进当前用户态构建链
+
+原因很简单：移植的目标是“验证 OS 接口能否承载现成程序”，而不是“重写 Doom 引擎”。
+
+#### 3.2 把 C 程序真正纳入当前构建链
+
+这一步才是最大的工程点。当前 [tg-rcore-tutorial-user](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/tg-rcore-tutorial-user) 主要是 Rust 用户程序集合，不是现成给大体量 C 工程直接塞进来的。
+
+至少要补下面几件事：
+
+1. 选择 C 用户程序接入方式
+   - 方案 A：给 `tg-rcore-tutorial-user` 新增一个专门构建 `doomgeneric` 的 build.rs/cc 链路
+   - 方案 B：单独做一个新的 Doom 用户程序 crate，再让主项目打包它
+2. 让 C 源码能为 `riscv64gc-unknown-none-elf` 目标编译
+3. 解决 C 侧依赖的头文件、链接参数和产物打包方式
+
+#### 3.3 提供 `doomgeneric` 需要的平台钩子
+
+上游 [doomgeneric/README.md](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/doomgeneric/README.md) 写得很清楚，最小平台适配至少要实现：
+
+- `DG_Init`
+- `DG_DrawFrame`
+- `DG_SleepMs`
+- `DG_GetTicksMs`
+- `DG_GetKey`
+
+对照当前仓库，基本映射是：
+
+- `DG_DrawFrame` -> `framebuffer_present`
+- `DG_GetTicksMs` -> `get_time()`
+- `DG_GetKey` -> `input_poll`
+- `DG_SleepMs` -> `sleep(ms)` 或 `get_time + sched_yield`
+
+这些接口本身并不神秘，难的是把它们放进一条可编译、可链接、可打包的 C 用户程序链路里。
+
+#### 3.4 处理 C 运行时与文件接口
+
+这一步不能低估。虽然 `doomgeneric` README 只强调 `DG_*`，但上游代码本体不只是吃这 5 个钩子。
+
+从 [doomgeneric/doomgeneric/doomgeneric.h](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/doomgeneric/doomgeneric/doomgeneric.h) 和源码实际使用情况看，它还明显依赖：
+
+- `stdlib.h` / `stdint.h`
+- `malloc` / `free`
+- `printf` / `fprintf`
+- `fopen` / `fread` / `fseek` / `fclose`
+- `exit`
+
+也就是说，真正的难点不是“写 5 个 `DG_*` 函数”而已，而是要给 Doom 提供一套最小可用的 C 运行时 / libc 兼容层，或者裁掉一部分不需要的功能。
+
+#### 3.5 把 `doom1.wad` 纳入镜像
+
+当 C 程序能编过以后，还需要：
+
+1. 把 `doom1.wad` 放进 [tg-rcore-tutorial-user/assets](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom/tg-rcore-tutorial-user/assets)
+2. 让 `build.rs` 在打包 `fs.img` 时把它收进去
+3. 确认 Doom 在用户态能通过文件接口找到并读取它
+
+当前已有的资源打包链已经能做这件事，只是还没有把 WAD 真接进去。
+
+#### 3.6 决定第一阶段功能边界
+
+建议第一阶段目标收敛为：
+
+- 只做视频，不做声音
+- 只做单机，不做联网
+- 先支持启动、进地图、移动、开火、退出
+- 存档和配置文件问题先降级处理，必要时先禁用
+
+这样能把最难的问题集中到“C 构建链 + 平台适配 + WAD 读取”。
+
+### 4. 这个目录和原 `ch8` 的关系
 
 - 原始章节目录仍然是 [tg-rcore-tutorial-ch8](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-ch8)
 - 当前目录是 task3 的游戏分支：
   [tg-rcore-tutorial-t3l8-doom](/Users/lorenzlorentz/tg-rcore-tutorial/tg-rcore-tutorial-t3l8-doom)
 
-如果后续要做实验报告，建议把图形、输入、移植链路里的 bug 和 AI 协作过程都记录在这个目录的上下文里，不要和基础 `ch8` exercise 混写。
+如果后续要做实验报告，建议把：
+
+- naive 小游戏的设计与验收
+- `doomgeneric` 接入过程
+- 图形 / 输入 / 文件系统打通过程
+
+都记录在这个目录语境里，不要和基础 `ch8` exercise 混写。
 
 # 第八章：并发
 

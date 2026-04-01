@@ -221,7 +221,7 @@ extern "C" fn rust_main() -> ! {
     // 步骤 5：建立内核地址空间并激活 Sv39 分页
     kernel_space(layout, MEMORY, portal_ptr as _);
     // 步骤 5.5：初始化图形显示（若 GPU 不存在则降级为无显示模式）
-    pingpong::init_display();
+    pingpong::init();
     // 步骤 6：初始化异界传送门（设置传送门页面的虚拟地址和 slot 数量）
     let portal = unsafe { MultislotPortal::init_transit(PROTAL_TRANSIT.base().val(), 1) };
     // 步骤 7：初始化系统调用处理器
@@ -359,7 +359,7 @@ fn kernel_space(layout: tg_linker::KernelLayout, memory: usize, portal: usize) {
         PPN::new(portal >> Sv39::PAGE_BITS),
         build_flags("__G_XWRV"),
     );
-    // 映射 pingpong 所需的 MMIO 设备：UART（非阻塞按键轮询）和 VirtIO-GPU
+    // 映射 pingpong 所需的 MMIO 设备：UART 兜底输入、VirtIO-GPU、VirtIO keyboard
     for (base, len) in pingpong::MMIO {
         let s = VAddr::<Sv39>::new(*base);
         let e = VAddr::<Sv39>::new(*base + *len);

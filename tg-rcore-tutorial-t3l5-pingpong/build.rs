@@ -69,10 +69,7 @@ fn build_apps() {
         "cargo:rerun-if-changed={}",
         tg_user_root.join("Cargo.toml").display()
     );
-    println!(
-        "cargo:rerun-if-changed={}",
-        tg_user_root.join("src").display()
-    );
+    emit_rerun_if_changed_recursive(&tg_user_root.join("src"));
 
     let cfg = fs::read_to_string(&cases_path).unwrap_or_else(|err| {
         panic!(
@@ -120,6 +117,21 @@ fn build_apps() {
     let app_asm = out_dir.join("app.asm");
     write_app_asm(&app_asm, base, step, &bins, &names);
     println!("cargo:rustc-env=APP_ASM={}", app_asm.display());
+}
+
+fn emit_rerun_if_changed_recursive(path: &PathBuf) {
+    if path.is_file() {
+        println!("cargo:rerun-if-changed={}", path.display());
+        return;
+    }
+
+    let entries = fs::read_dir(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {}", path.display(), err));
+    for entry in entries {
+        let entry =
+            entry.unwrap_or_else(|err| panic!("failed to access {}: {}", path.display(), err));
+        emit_rerun_if_changed_recursive(&entry.path());
+    }
 }
 
 fn build_user_app(tg_user_root: &PathBuf, name: &str, base_address: u64) {

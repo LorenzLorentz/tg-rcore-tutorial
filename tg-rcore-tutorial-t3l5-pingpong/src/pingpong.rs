@@ -2,7 +2,7 @@
 //!
 //! 本模块承担三类职责：
 //! - 将 `tg-rcore-tutorial-gfx` 接到 ch5 内核页表/MMIO 环境
-//! - 轮询 UART 输入并分发给左右两个玩家进程
+//! - 轮询 VirtIO 键盘输入，并在无键盘时回退到 UART
 //! - 维护球、球拍、比分等游戏状态，并负责每帧渲染
 
 use crate::{KERNEL_SPACE, Sv39, build_flags};
@@ -14,10 +14,21 @@ use tg_console::log;
 use tg_kernel_vm::page_table::{MmuMeta, VAddr, VmFlags};
 use tg_rcore_tutorial_gfx::{Canvas, Color, DisplayDriver, Point, VIRTIO_GPU_MMIO_BASE};
 use tg_task_manage::ProcId;
-use virtio_drivers::Hal;
+use virtio_drivers::{Hal, InputEvent, MmioTransport, VirtIOHeader, VirtIOInput};
 
 const UART_BASE: usize = 0x1000_0000;
 const UART_LSR: usize = UART_BASE + 5;
+const VIRTIO_INPUT_MMIO_BASE: usize = VIRTIO_GPU_MMIO_BASE + 0x1000;
+
+const INPUT_EVENT_KEY: u16 = 0x01;
+const INPUT_VALUE_RELEASE: u32 = 0;
+
+const KEY_Q: u16 = 16;
+const KEY_W: u16 = 17;
+const KEY_R: u16 = 19;
+const KEY_O: u16 = 24;
+const KEY_S: u16 = 31;
+const KEY_L: u16 = 38;
 
 const ROLE_HOST: usize = 0;
 const ROLE_LEFT: usize = 1;
@@ -68,8 +79,10 @@ enum Phase {
 #[derive(Clone, Copy)]
 struct PlayerSlot {
     pid: Option<ProcId>,
-    up_key: u8,
-    down_key: u8,
+    up_key: u16,
+    down_key: u16,
+    up_pressed: bool,
+    down_pressed: bool,
     paddle_y: i32,
 }
 
@@ -79,6 +92,8 @@ impl PlayerSlot {
             pid: None,
             up_key: 0,
             down_key: 0,
+            up_pressed: false,
+            down_pressed: false,
             paddle_y: default_y,
         }
     }
@@ -89,11 +104,20 @@ impl PlayerSlot {
 
     fn attach(&mut self, pid: ProcId, up_key: u8, down_key: u8, default_y: i32) {
         self.pid = Some(pid);
-        self.up_key = ascii_lower(up_key);
-        self.down_key = ascii_lower(down_key);
+        self.up_key = ascii_to_keycode(up_key);
+        self.down_key = ascii_to_keycode(down_key);
+        self.up_pressed = false;
+        self.down_pressed = false;
         self.paddle_y = default_y;
     }
 }
+
+struct Keyboard {
+    inner: VirtIOInput<KernelHal, MmioTransport>,
+}
+
+unsafe impl Send for Keyboard {}
+unsafe impl Sync for Keyboard {}
 
 struct PingPongKernel {
     host: Option<ProcId>,
@@ -140,6 +164,10 @@ impl PingPongKernel {
         } else {
             self.players[0].paddle_y = default_y;
             self.players[1].paddle_y = default_y;
+            self.players[0].up_pressed = false;
+            self.players[0].down_pressed = false;
+            self.players[1].up_pressed = false;
+            self.players[1].down_pressed = false;
         }
         self.reset_round(true);
     }
@@ -187,7 +215,8 @@ impl PingPongKernel {
         if self.host != Some(pid) {
             return -1;
         }
-        self.poll_uart();
+        self.poll_input();
+        self.apply_player_motion();
         match self.phase {
             Phase::Quit => {}
             Phase::Lobby => {
@@ -204,7 +233,6 @@ impl PingPongKernel {
     }
 
     fn tick_player(&mut self, pid: ProcId, role: usize) -> isize {
-        self.poll_uart();
         let Some(slot) = self.player_slot_mut(role) else {
             return -1;
         };
@@ -237,29 +265,89 @@ impl PingPongKernel {
         }
     }
 
-    fn poll_uart(&mut self) {
-        while let Some(ch) = uart_getchar_nonblocking() {
-            let ch = ascii_lower(ch);
-            match ch {
-                b'q' => {
-                    self.phase = Phase::Quit;
-                    continue;
-                }
-                b'r' => {
-                    self.session_reset(false);
-                    continue;
-                }
-                _ => {}
+    fn poll_input(&mut self) {
+        if keyboard_available() {
+            while let Some(event) = keyboard_pop_pending_event() {
+                self.handle_keyboard_event(event);
             }
-            for slot in &mut self.players {
-                if slot.pid.is_none() {
-                    continue;
-                }
-                if ch == slot.up_key {
-                    slot.paddle_y = (slot.paddle_y - PADDLE_STEP).clamp(0, LOGICAL_H - PADDLE_H);
-                } else if ch == slot.down_key {
-                    slot.paddle_y = (slot.paddle_y + PADDLE_STEP).clamp(0, LOGICAL_H - PADDLE_H);
-                }
+        } else {
+            while let Some(ch) = uart_getchar_nonblocking() {
+                self.handle_ascii_input(ascii_lower(ch));
+            }
+        }
+    }
+
+    fn handle_keyboard_event(&mut self, event: InputEvent) {
+        if event.event_type != INPUT_EVENT_KEY {
+            return;
+        }
+        let pressed = event.value != INPUT_VALUE_RELEASE;
+        match event.code {
+            KEY_Q if pressed => {
+                self.phase = Phase::Quit;
+                return;
+            }
+            KEY_R if pressed => {
+                self.session_reset(false);
+                return;
+            }
+            _ => {}
+        }
+
+        for slot in &mut self.players {
+            if slot.pid.is_none() {
+                continue;
+            }
+            if event.code == slot.up_key {
+                slot.up_pressed = pressed;
+            } else if event.code == slot.down_key {
+                slot.down_pressed = pressed;
+            }
+        }
+    }
+
+    fn handle_ascii_input(&mut self, ch: u8) {
+        match ch {
+            b'q' => {
+                self.phase = Phase::Quit;
+                return;
+            }
+            b'r' => {
+                self.session_reset(false);
+                return;
+            }
+            _ => {}
+        }
+
+        for slot in &mut self.players {
+            if slot.pid.is_none() {
+                continue;
+            }
+            let delta = if ch == keycode_to_ascii(slot.up_key) {
+                -PADDLE_STEP
+            } else if ch == keycode_to_ascii(slot.down_key) {
+                PADDLE_STEP
+            } else {
+                0
+            };
+            if delta != 0 {
+                slot.paddle_y = (slot.paddle_y + delta).clamp(0, LOGICAL_H - PADDLE_H);
+            }
+        }
+    }
+
+    fn apply_player_motion(&mut self) {
+        for slot in &mut self.players {
+            if slot.pid.is_none() {
+                continue;
+            }
+            let delta = match (slot.up_pressed, slot.down_pressed) {
+                (true, false) => -PADDLE_STEP,
+                (false, true) => PADDLE_STEP,
+                _ => 0,
+            };
+            if delta != 0 {
+                slot.paddle_y = (slot.paddle_y + delta).clamp(0, LOGICAL_H - PADDLE_H);
             }
         }
     }
@@ -589,19 +677,45 @@ impl Hal for KernelHal {
 }
 
 static DISPLAY: Lazy<Mutex<Option<DisplayDriver<KernelHal>>>> = Lazy::new(|| Mutex::new(None));
+static INPUT: Lazy<Mutex<Option<Keyboard>>> = Lazy::new(|| Mutex::new(None));
 static GAME: Lazy<Mutex<PingPongKernel>> = Lazy::new(|| Mutex::new(PingPongKernel::new()));
 
 /// 需要映射到内核页表中的 MMIO 范围。
-pub const MMIO: &[(usize, usize)] = &[(UART_BASE, 0x1000), (VIRTIO_GPU_MMIO_BASE, 0x1000)];
+pub const MMIO: &[(usize, usize)] = &[
+    (UART_BASE, 0x1000),
+    (VIRTIO_GPU_MMIO_BASE, 0x1000),
+    (VIRTIO_INPUT_MMIO_BASE, 0x1000),
+];
 
-/// 初始化图形输出；若缺少 GPU 设备，则保持降级模式继续运行内核。
-pub fn init_display() {
+/// 初始化 pingpong 的图形与键盘输入。
+pub fn init() {
+    init_input();
     match DisplayDriver::<KernelHal>::new(VIRTIO_GPU_MMIO_BASE) {
         Ok(display) => {
             *DISPLAY.lock() = Some(display);
             GAME.lock().render();
         }
         Err(err) => log::warn!("pingpong display unavailable: {err:?}"),
+    }
+}
+
+fn init_input() {
+    let Some(header) = NonNull::new(VIRTIO_INPUT_MMIO_BASE as *mut VirtIOHeader) else {
+        return;
+    };
+    let transport = match unsafe { MmioTransport::new(header) } {
+        Ok(transport) => transport,
+        Err(err) => {
+            log::warn!("pingpong keyboard transport unavailable: {err:?}");
+            return;
+        }
+    };
+    match VirtIOInput::<KernelHal, _>::new(transport) {
+        Ok(input) => {
+            *INPUT.lock() = Some(Keyboard { inner: input });
+            log::info!("pingpong keyboard ready at {:#x}", VIRTIO_INPUT_MMIO_BASE);
+        }
+        Err(err) => log::warn!("pingpong keyboard init failed: {err:?}"),
     }
 }
 
@@ -634,8 +748,41 @@ fn ascii_lower(ch: u8) -> u8 {
     if ch.is_ascii_uppercase() { ch + 32 } else { ch }
 }
 
+fn ascii_to_keycode(ch: u8) -> u16 {
+    match ascii_lower(ch) {
+        b'q' => KEY_Q,
+        b'w' => KEY_W,
+        b'r' => KEY_R,
+        b'o' => KEY_O,
+        b's' => KEY_S,
+        b'l' => KEY_L,
+        _ => 0,
+    }
+}
+
+fn keycode_to_ascii(code: u16) -> u8 {
+    match code {
+        KEY_Q => b'q',
+        KEY_W => b'w',
+        KEY_R => b'r',
+        KEY_O => b'o',
+        KEY_S => b's',
+        KEY_L => b'l',
+        _ => 0,
+    }
+}
+
 fn now_ms() -> usize {
     time::read() / 12_500
+}
+
+fn keyboard_available() -> bool {
+    INPUT.lock().is_some()
+}
+
+fn keyboard_pop_pending_event() -> Option<InputEvent> {
+    let mut input = INPUT.lock();
+    input.as_mut().and_then(|keyboard| keyboard.inner.pop_pending_event())
 }
 
 fn uart_getchar_nonblocking() -> Option<u8> {

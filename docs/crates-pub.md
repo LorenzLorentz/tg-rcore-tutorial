@@ -12,7 +12,7 @@
 | `wpj-tg-rcore-tutorial-easy-fs` | 已发布 `0.0.1` | 本次从 `0.0.0` 更新到 `0.0.1` |
 | `wpj-tg-rcore-tutorial-t3l1-tangram` | 已发布 `0.0.0` | 本次首次发布成功 |
 | `wpj-tg-rcore-tutorial-t3l5-pingpong` | 已发布 `0.0.1` | 首发 `0.0.0` 后，本次补丁更新到 `0.0.1` |
-| `wpj-tg-rcore-tutorial-t3l8-doom` | 已发布 `0.0.1` | 首发 `0.0.0` 后，本次补丁更新到 `0.0.1` |
+| `wpj-tg-rcore-tutorial-t3l8-doom` | 已发布 `0.0.2` | 在 `0.0.1` 基础上继续补丁更新到 `0.0.2` |
 
 ## 本次发布涉及的改动点
 
@@ -33,6 +33,11 @@
   - 为 `virtio-drivers` 和 `wpj-tg-rcore-tutorial-gfx` 补上显式版本。
   - 打包时显式包含 `capps/doom/**`、`doomgeneric/doomgeneric/**` 和包内 `tg-rcore-tutorial-user/assets/**`，避免 `cargo publish` 产物缺少 Doom 端口层和 `doom1.wad`。
   - `0.0.1` 额外修复了与 `t3l5` 相同的内嵌 manifest 构建回归，同时继续保证打包结果包含 `doomgeneric/**` 和 `doom1.wad`。
+  - `0.0.2` 额外修复了 Doom 默认启动行为与交互说明：
+    - 默认附加 `-skill 2 -warp 1 1`，启动后直接进入新游戏，不再落到 attract/demo 播放。
+    - 菜单继续以 `W/A/S/D` 为默认导航，同时兼容方向键。
+    - 启动后在命令行打印当前键位说明。
+    - `build.rs` 改为递归跟踪 `capps/doom/**` 与 `doomgeneric/**` 的文件变化，避免修改 C 端口后未触发重编译。
 
 ## 为什么不发布 `tg-rcore-tutorial-syscall`
 
@@ -48,7 +53,7 @@
 | `wpj-tg-rcore-tutorial-easy-fs 0.0.1` | `spin`, `bitflags` |
 | `wpj-tg-rcore-tutorial-t3l1-tangram 0.0.0` | `tg-rcore-tutorial-sbi = 0.4.8`, `wpj-tg-rcore-tutorial-gfx = 0.0.0` |
 | `wpj-tg-rcore-tutorial-t3l5-pingpong 0.0.1` | `tg-rcore-tutorial-ch5` 同级依赖 + `virtio-drivers = 0.1.0` + `wpj-tg-rcore-tutorial-gfx = 0.0.0` |
-| `wpj-tg-rcore-tutorial-t3l8-doom 0.0.1` | `tg-rcore-tutorial-ch8` 同级依赖 + `virtio-drivers = 0.1.0` + `wpj-tg-rcore-tutorial-gfx = 0.0.0` + `wpj-tg-rcore-tutorial-easy-fs = 0.0.1` |
+| `wpj-tg-rcore-tutorial-t3l8-doom 0.0.2` | `tg-rcore-tutorial-ch8` 同级依赖 + `virtio-drivers = 0.1.0` + `wpj-tg-rcore-tutorial-gfx = 0.0.0` + `wpj-tg-rcore-tutorial-easy-fs = 0.0.1` |
 
 ## 实际发布顺序与结果
 
@@ -59,8 +64,9 @@
 5. `wpj-tg-rcore-tutorial-t3l8-doom 0.0.0`
 6. `wpj-tg-rcore-tutorial-t3l5-pingpong 0.0.1`
 7. `wpj-tg-rcore-tutorial-t3l8-doom 0.0.1`
+8. `wpj-tg-rcore-tutorial-t3l8-doom 0.0.2`
 
-上述 7 次发布均已成功完成，线上版本检查结果与本地预期一致。
+上述 8 次发布均已成功完成，线上版本检查结果与本地预期一致。
 
 ## 打包与发布注意事项
 

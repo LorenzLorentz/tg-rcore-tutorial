@@ -69,6 +69,24 @@ fn write_linker() {
     println!("cargo:rustc-link-arg=-T{}", ld.display());
 }
 
+fn emit_rerun_if_changed(path: &Path) {
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    if !path.is_dir() {
+        return;
+    }
+
+    let mut entries = fs::read_dir(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    entries.sort();
+
+    for entry in entries {
+        emit_rerun_if_changed(&entry);
+    }
+}
+
 fn is_packaged_build() -> bool {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let out_dir = out_dir.to_string_lossy();
@@ -92,26 +110,15 @@ fn build_apps_and_pack_fs() {
         "cargo:rerun-if-changed={}",
         tg_user_manifest.rerun_path.display()
     );
-    println!(
-        "cargo:rerun-if-changed={}",
-        tg_user_root.join("src").display()
+    emit_rerun_if_changed(&tg_user_root.join("src"));
+    emit_rerun_if_changed(&tg_user_root.join("assets"));
+    emit_rerun_if_changed(
+        &PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("doomgeneric"),
     );
-    println!(
-        "cargo:rerun-if-changed={}",
-        tg_user_root.join("assets").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap())
-            .join("doomgeneric")
-            .display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap())
+    emit_rerun_if_changed(
+        &PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap())
             .join("capps")
-            .join("doom")
-            .display()
+            .join("doom"),
     );
     println!("cargo:rerun-if-env-changed=RCORE_DOOM_CC");
 

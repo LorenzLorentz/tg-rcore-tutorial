@@ -1,0 +1,15 @@
+[package]
+name = "wpj-tg-rcore-tutorial-sync-mp"
+description = "Multicore-ready synchronization primitives for rCore tutorial OS."
+version = "0.0.0"
+edition = "2024"
+authors = ["zflcs <zhaofangliang@foxmail.com>"]
+license = "GPL-3.0"
+readme = "README.md"
+keywords = ["rcore", "sync", "mutex", "riscv"]
+categories = ["no-std", "embedded", "concurrency"]
+
+[dependencies]
+riscv = "0.10"
+spin = "0.9"
+tg-task-manage = { package = "tg-rcore-tutorial-task-manage", version = "0.4.8" }

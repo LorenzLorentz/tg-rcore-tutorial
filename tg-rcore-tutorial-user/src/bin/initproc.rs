@@ -27,6 +27,19 @@ extern "C" fn main() -> i32 {
         return 0;
     }
 
+    if option_env!("CHAPTER").unwrap_or("0") == "45" {
+        let scenario = option_env!("T4L45_SCENARIO").unwrap_or("mixed");
+        let target = match scenario {
+            "cpu" => "sched_lab_cpu",
+            "io" => "sched_lab_io",
+            "interactive" => "sched_lab_interactive",
+            "mixed" => "sched_lab_mixed",
+            other => other,
+        };
+        exec(target);
+        return 0;
+    }
+
     if fork() == 0 {
         // 子进程执行实际目标程序，父进程负责兜底回收孤儿退出。
         let target = match option_env!("CHAPTER").unwrap_or("0") {

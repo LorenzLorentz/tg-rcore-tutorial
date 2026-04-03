@@ -7,6 +7,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CHAPTER");
     println!("cargo:rerun-if-env-changed=T2L4_SCENARIO");
     println!("cargo:rerun-if-env-changed=T2L5_SCENARIO");
+    println!("cargo:rerun-if-env-changed=T4L45_SCENARIO");
 
     if let Ok(chapter) = env::var("CHAPTER") {
         println!("cargo:rustc-env=CHAPTER={chapter}");
@@ -16,6 +17,9 @@ fn main() {
     }
     if let Ok(scenario) = env::var("T2L5_SCENARIO") {
         println!("cargo:rustc-env=T2L5_SCENARIO={scenario}");
+    }
+    if let Ok(scenario) = env::var("T4L45_SCENARIO") {
+        println!("cargo:rustc-env=T4L45_SCENARIO={scenario}");
     }
 
     if let Some(base) = env::var("BASE_ADDRESS")

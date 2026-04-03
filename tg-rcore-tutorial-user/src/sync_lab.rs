@@ -12,6 +12,8 @@ pub const T2L5_TRACE_GET_CONTEXT_SWITCHES: usize = 0x201;
 pub const T2L5_TRACE_GET_BLOCKED_SYNC: usize = 0x202;
 /// t2l5 trace 请求：读取同步唤醒次数。
 pub const T2L5_TRACE_GET_WAKEUPS: usize = 0x203;
+/// t4l45 trace 请求：读取当前 hart 编号。
+pub const T4L45_TRACE_GET_CURRENT_HART: usize = 0x204;
 
 /// 内核计数器快照。
 #[derive(Clone, Copy)]
@@ -301,6 +303,11 @@ pub fn kernel_metrics() -> KernelMetricSnapshot {
         blocked_sync_ops: trace(T2L5_TRACE_GET_BLOCKED_SYNC, 0, 0) as usize,
         wakeups: trace(T2L5_TRACE_GET_WAKEUPS, 0, 0) as usize,
     }
+}
+
+/// 读取当前线程所在的 hart 编号。
+pub fn current_hart_id() -> usize {
+    trace(T4L45_TRACE_GET_CURRENT_HART, 0, 0) as usize
 }
 
 /// 包装 `mutex_lock`，返回是否发生过阻塞。

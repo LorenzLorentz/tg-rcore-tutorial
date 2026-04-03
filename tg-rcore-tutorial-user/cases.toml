@@ -171,6 +171,27 @@ cases = [
     "initproc",
 ]
 
+[t4l45]
+cases = [
+    "initproc",
+    "sched_lab_cpu",
+    "sched_lab_io",
+    "sched_lab_interactive",
+    "sched_lab_mixed",
+    "t2l5_spin_ticket",
+    "t2l5_spin_broken",
+    "t2l5_mutex_stress",
+    "t2l5_semaphore_pc",
+    "t2l5_condvar_pc",
+    "t2l5_condvar_if_bug",
+    "t2l5_rwlock_fair",
+    "t2l5_rwlock_reader_pref",
+    "t2l5_phil_mutex",
+    "t4l45_smp_probe",
+    "t4l45_hybrid_pipeline",
+    "t4l45_semaphore_ring",
+]
+
 [ch3_exercise]
 base = 0x8040_0000
 step = 0x0020_0000

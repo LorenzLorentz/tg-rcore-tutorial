@@ -2,7 +2,7 @@ mod multislot_portal;
 
 pub use multislot_portal::MultislotPortal;
 
-use crate::{build_sstatus, LocalContext};
+use crate::{LocalContext, build_sstatus};
 #[cfg(target_arch = "riscv64")]
 use spin::Lazy;
 

@@ -3,9 +3,12 @@
 
 #[macro_use]
 extern crate user_lib;
+extern crate alloc;
+
+use alloc::format;
 use user_lib::{
     condvar_create, condvar_signal, condvar_wait, exit, mutex_create, mutex_lock, mutex_unlock,
-    sleep, thread_create, waittid,
+    print_user_bug, sleep, thread_create, waittid,
 };
 
 const MUTEX_ID: usize = 0;
@@ -57,6 +60,16 @@ pub extern "C" fn main() -> i32 {
         }
     }
     println!("[t2l5-control] condvar if-bug failed_threads={failed}");
-    assert!(failed > 0, "condvar if-bug unexpectedly passed");
-    1
+    if failed > 0 {
+        print_user_bug(
+            "exact",
+            "condvar_if_misuse",
+            "condvar",
+            &format!("failed_threads={}", failed),
+        );
+        0
+    } else {
+        println!("condvar if-bug unexpectedly passed");
+        1
+    }
 }

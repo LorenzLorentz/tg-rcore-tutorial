@@ -23,9 +23,7 @@
 //! - 再看 `fork/exec/from_elf`：理解跨线程模型后，进程复制与替换语义如何变化；
 //! - 最后结合 `processor.rs` 看线程生命周期与进程资源回收的关系。
 
-use crate::{
-    Sv39, Sv39Manager, build_flags, fs::Fd, map_portal, parse_flags,
-};
+use crate::{Sv39, Sv39Manager, build_flags, fs::Fd, map_portal, parse_flags};
 use alloc::{
     alloc::alloc_zeroed,
     boxed::Box,

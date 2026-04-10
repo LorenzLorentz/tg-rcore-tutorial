@@ -30,7 +30,7 @@ pub const MAX_HARTS: usize = 4;
 pub fn current_hart() -> usize {
     let hart_id: usize;
     unsafe {
-        core::arch::asm!("csrr {}, sscratch", out(reg) hart_id);
+        core::arch::asm!("mv {}, tp", out(reg) hart_id);
     }
     hart_id
 }
@@ -640,15 +640,28 @@ impl ProcessorInner {
             .begin_switch(hart_id, Some(tid), reason, burst_ns, now_ns);
     }
 
-    /// 虚拟 tick 到达，返回 `true` 表示需要发生调度切换。
-    pub fn handle_tick(&mut self, task: &mut RunningTask) -> bool {
+    /// 处理一个或多个调度 tick，返回 `true` 表示需要发生调度切换。
+    pub fn handle_ticks(&mut self, task: &mut RunningTask, ticks: usize) -> bool {
+        if ticks == 0 {
+            return false;
+        }
         let now_ns = time_now_ns();
         let delta_ns = now_ns.saturating_sub(task.accounted_at_ns);
         task.accounted_at_ns = now_ns;
-        matches!(
-            self.scheduler.on_tick(&mut task.thread.sched, delta_ns),
-            TickDecision::Yield
-        )
+        let mut should_yield = false;
+        for idx in 0..ticks {
+            let tick_delta = if idx == 0 { delta_ns } else { 0 };
+            should_yield |= matches!(
+                self.scheduler.on_tick(&mut task.thread.sched, tick_delta),
+                TickDecision::Yield
+            );
+        }
+        should_yield
+    }
+
+    /// 处理单个调度 tick，返回 `true` 表示需要发生调度切换。
+    pub fn handle_tick(&mut self, task: &mut RunningTask) -> bool {
+        self.handle_ticks(task, 1)
     }
 
     /// 查找当前应运行的线程。

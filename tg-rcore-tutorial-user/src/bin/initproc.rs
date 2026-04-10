@@ -1,9 +1,11 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
 extern crate user_lib;
 
-use user_lib::{exec, fork, wait};
+use core::str;
+use user_lib::{OpenFlags, close, exec, fork, open, read, wait};
 
 // 教学目标：
 // 作为用户态“第一个进程”入口，按章节配置启动对应测试集或 shell。
@@ -23,7 +25,23 @@ extern "C" fn main() -> i32 {
     }
 
     if option_env!("CHAPTER").unwrap_or("0") == "10" {
-        exec(option_env!("T2L5_SCENARIO").unwrap_or("t2l5_mutex_stress"));
+        let default = open("t2l5_default\0", OpenFlags::RDONLY);
+        if default >= 0 {
+            let fd = default as usize;
+            let mut buf = [0u8; 64];
+            let len = read(fd, &mut buf);
+            close(fd);
+            if len > 0 {
+                if let Ok(target) = str::from_utf8(&buf[..len as usize]) {
+                    let target = target.trim_matches(|ch| ch == '\0' || ch == '\n' || ch == '\r');
+                    if !target.is_empty() {
+                        exec(target);
+                        return 0;
+                    }
+                }
+            }
+        }
+        exec("t2l5_lab_menu");
         return 0;
     }
 

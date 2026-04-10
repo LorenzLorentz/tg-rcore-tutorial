@@ -152,11 +152,13 @@ impl LocalContext {
             let ctx_ptr = self as *mut Self;
             let mut sepc = self.sepc;
             let old_sscratch: usize;
+            let old_stvec: usize;
             // 第二步：切换到 execute_naked，执行真正的上下文保存/恢复。
             // SAFETY: 内联汇编执行上下文切换，调用者已确保处于 S 模式且 CSR 可被修改
             unsafe {
                 core::arch::asm!(
-                    "   csrrw {old_ss}, sscratch, {ctx}
+                    "   csrr  {old_tv}, stvec
+                        csrrw {old_ss}, sscratch, {ctx}
                         csrw  sepc    , {sepc}
                         csrw  sstatus , {sstatus}
                         addi  sp, sp, -8
@@ -164,18 +166,21 @@ impl LocalContext {
                         call  {execute_naked}
                         ld    ra, (sp)
                         addi  sp, sp,  8
+                        csrw  stvec   , {old_tv}
                         csrw  sscratch, {old_ss}
                         csrr  {sepc}   , sepc
                         csrr  {sstatus}, sstatus
                     ",
                     ctx           = in       (reg) ctx_ptr,
                     old_ss        = out      (reg) old_sscratch,
+                    old_tv        = out      (reg) old_stvec,
                     sepc          = inlateout(reg) sepc,
                     sstatus       = inlateout(reg) sstatus,
                     execute_naked = sym execute_naked,
                 );
             }
             let _ = old_sscratch; // suppress unused warning
+            let _ = old_stvec; // suppress unused warning
             // 第三步：取回线程返回后的 sepc（比如 trap 后已更新到下一条指令）。
             unsafe { (*ctx_ptr).sepc = sepc };
             sstatus

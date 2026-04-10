@@ -52,6 +52,8 @@ mod fs;
 mod process;
 /// 处理器模块：PROCESSOR 全局管理器（PThreadManager）
 mod processor;
+/// 常驻内核 trap 入口与延迟 tick 状态
+mod trap;
 /// VirtIO 块设备驱动
 mod virtio_block;
 
@@ -223,7 +225,6 @@ fn fault_mode() -> FaultMode {
 extern "C" fn rust_main(hart_id: usize) -> ! {
     unsafe {
         core::arch::asm!("mv tp, {}", in(reg) hart_id);
-        core::arch::asm!("csrw sscratch, {}", in(reg) hart_id);
     }
     let layout = tg_linker::KernelLayout::locate();
     if hart_id == 0 {
@@ -270,6 +271,7 @@ extern "C" fn rust_main(hart_id: usize) -> ! {
         }
     }
     activate_kernel_space();
+    trap::init_hart(hart_id);
     enable_timer_interrupts();
     run_scheduler_loop(hart_id)
 }
@@ -316,6 +318,15 @@ fn block_running_task(hart_id: usize, task: RunningTask) {
     PROCESSOR.clear_current(hart_id);
 }
 
+fn should_preempt_before_user_return(
+    hart_id: usize,
+    task: &mut RunningTask,
+    extra_ticks: usize,
+) -> bool {
+    let total_ticks = trap::take_pending_timer_ticks(hart_id).saturating_add(extra_ticks);
+    total_ticks != 0 && PROCESSOR.with_inner(|inner| inner.handle_ticks(task, total_ticks))
+}
+
 fn run_scheduler_loop(hart_id: usize) -> ! {
     loop {
         if let Some(mut task) = PROCESSOR.take_next(hart_id) {
@@ -326,7 +337,7 @@ fn run_scheduler_loop(hart_id: usize) -> ! {
 
                 match scause::read().cause() {
                     scause::Trap::Interrupt(scause::Interrupt::SupervisorTimer) => {
-                        if PROCESSOR.with_inner(|inner| inner.handle_tick(&mut task)) {
+                        if should_preempt_before_user_return(hart_id, &mut task, 1) {
                             tick_suspend_running_task(hart_id, task);
                             break;
                         }
@@ -337,50 +348,69 @@ fn run_scheduler_loop(hart_id: usize) -> ! {
                         ctx.move_next();
                         let id: Id = ctx.a(7).into();
                         let args = [ctx.a(0), ctx.a(1), ctx.a(2), ctx.a(3), ctx.a(4), ctx.a(5)];
-                        let syscall_ret =
-                            tg_syscall::handle(Caller { entity: 0, flow: 0 }, id, args);
-
-                        let signal_result = PROCESSOR
-                            .with_proc(task.pid, |proc| proc.signal.handle_signals(ctx))
-                            .unwrap();
+                        let (syscall_ret, signal_result) = trap::with_interrupts_enabled(|| {
+                            let syscall_ret =
+                                tg_syscall::handle(Caller { entity: 0, flow: 0 }, id, args);
+                            let signal_result = PROCESSOR
+                                .with_proc(task.pid, |proc| proc.signal.handle_signals(ctx))
+                                .unwrap();
+                            (syscall_ret, signal_result)
+                        });
                         match signal_result {
                             SignalResult::ProcessKilled(exit_code) => {
+                                let _ = trap::take_pending_timer_ticks(hart_id);
                                 finish_running_task(hart_id, task, exit_code as _);
                                 break;
                             }
                             _ => match syscall_ret {
                                 Ret::Done(ret) => match id {
                                     Id::EXIT => {
+                                        let _ = trap::take_pending_timer_ticks(hart_id);
                                         finish_running_task(hart_id, task, ret);
                                         break;
                                     }
                                     Id::SEMAPHORE_DOWN | Id::MUTEX_LOCK | Id::CONDVAR_WAIT => {
                                         *ctx.a_mut(0) = ret as _;
                                         if ret == -1 {
+                                            let _ = trap::take_pending_timer_ticks(hart_id);
                                             KERNEL_METRICS.blocked_sync_ops.fetch_add(
                                                 1,
                                                 core::sync::atomic::Ordering::Relaxed,
                                             );
                                             block_running_task(hart_id, task);
-                                        } else {
-                                            suspend_running_task(hart_id, task);
+                                            break;
                                         }
+                                        if should_preempt_before_user_return(hart_id, &mut task, 0)
+                                        {
+                                            tick_suspend_running_task(hart_id, task);
+                                            break;
+                                        }
+                                    }
+                                    Id::SCHED_YIELD => {
+                                        let _ = trap::take_pending_timer_ticks(hart_id);
+                                        *ctx.a_mut(0) = ret as _;
+                                        suspend_running_task(hart_id, task);
                                         break;
                                     }
                                     Id::TRACE if args[0] == LAB_TICK_REQUEST => {
                                         *ctx.a_mut(0) = ret as _;
-                                        if PROCESSOR.with_inner(|inner| inner.handle_tick(&mut task)) {
+                                        if should_preempt_before_user_return(hart_id, &mut task, 1)
+                                        {
                                             tick_suspend_running_task(hart_id, task);
                                             break;
                                         }
                                     }
                                     _ => {
                                         *ctx.a_mut(0) = ret as _;
-                                        suspend_running_task(hart_id, task);
-                                        break;
+                                        if should_preempt_before_user_return(hart_id, &mut task, 0)
+                                        {
+                                            tick_suspend_running_task(hart_id, task);
+                                            break;
+                                        }
                                     }
                                 },
                                 Ret::Unsupported(_) => {
+                                    let _ = trap::take_pending_timer_ticks(hart_id);
                                     log::info!("id = {id:?}");
                                     finish_running_task(hart_id, task, -2);
                                     break;
@@ -395,7 +425,8 @@ fn run_scheduler_loop(hart_id: usize) -> ! {
                     }
                 }
             }
-        } else if PROCESSOR.with_inner(|inner| inner.is_drained()) && PROCESSOR.running_tasks() == 0 {
+        } else if PROCESSOR.with_inner(|inner| inner.is_drained()) && PROCESSOR.running_tasks() == 0
+        {
             if hart_id == 0 && !REPORT_PRINTED.swap(true, AtomicOrdering::AcqRel) {
                 PROCESSOR.with_inner(|inner| inner.print_report());
                 tg_sbi::shutdown(false);
@@ -809,8 +840,8 @@ mod impls {
             } else {
                 return -1;
             };
-            let wait_result =
-                PROCESSOR.with_inner(|inner| inner.wait(current_pid, ProcId::from_usize(pid as usize)));
+            let wait_result = PROCESSOR
+                .with_inner(|inner| inner.wait(current_pid, ProcId::from_usize(pid as usize)));
             if let Some((dead_pid, exit_code)) = wait_result {
                 PROCESSOR
                     .with_current_proc(hart_id(), |current| {
@@ -878,9 +909,8 @@ mod impls {
             match clock_id {
                 ClockId::CLOCK_MONOTONIC => PROCESSOR
                     .with_current_proc(hart_id(), |current| {
-                        if let Some(mut ptr) = current
-                            .address_space
-                            .translate(VAddr::new(tp), WRITABLE)
+                        if let Some(mut ptr) =
+                            current.address_space.translate(VAddr::new(tp), WRITABLE)
                         {
                             let time = riscv::register::time::read() * 10000 / 125;
                             *unsafe { ptr.as_mut() } = TimeSpec {
@@ -972,14 +1002,19 @@ mod impls {
 
         fn sigprocmask(&self, _caller: Caller, mask: usize) -> isize {
             PROCESSOR
-                .with_current_proc(hart_id(), |current| current.signal.update_mask(mask) as isize)
+                .with_current_proc(hart_id(), |current| {
+                    current.signal.update_mask(mask) as isize
+                })
                 .unwrap_or(-1)
         }
 
         fn sigreturn(&self, _caller: Caller) -> isize {
             PROCESSOR
                 .with_current_proc_and_thread(hart_id(), |current, current_thread| {
-                    if current.signal.sig_return(&mut current_thread.context.context) {
+                    if current
+                        .signal
+                        .sig_return(&mut current_thread.context.context)
+                    {
                         0
                     } else {
                         -1

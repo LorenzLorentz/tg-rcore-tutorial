@@ -103,18 +103,21 @@ fn build_apps_and_pack_fs() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let fs_target_dir = manifest_dir.join("target").join(TARGET_ARCH).join("debug");
     let app_target_dir = tg_user_root.join("target").join(TARGET_ARCH).join("debug");
+    let default_scenario = env::var("T2L5_SCENARIO").unwrap_or_else(|_| "t2l5_lab_menu".into());
 
     for (i, name) in names.iter().enumerate() {
         let base_address = base + i as u64 * step;
         build_user_app(&tg_user_root, name, base_address);
     }
 
-    easy_fs_pack(&names, &app_target_dir, &fs_target_dir).unwrap_or_else(|err| {
+    easy_fs_pack(&names, &app_target_dir, &fs_target_dir, &default_scenario).unwrap_or_else(
+        |err| {
         panic!(
             "failed to pack easy-fs image in {}: {err}",
             fs_target_dir.display()
         )
-    });
+        },
+    );
 }
 
 fn build_user_app(tg_user_root: &PathBuf, name: &str, base_address: u64) {
@@ -128,6 +131,8 @@ fn build_user_app(tg_user_root: &PathBuf, name: &str, base_address: u64) {
         "--target",
         TARGET_ARCH,
     ]);
+    cmd.env("CHAPTER", env::var("CHAPTER").unwrap_or_else(|_| "10".into()));
+    cmd.env_remove("T2L5_SCENARIO");
 
     if base_address != 0 {
         cmd.env("BASE_ADDRESS", base_address.to_string());
@@ -165,6 +170,7 @@ fn easy_fs_pack(
     cases: &[String],
     app_target: &PathBuf,
     fs_target: &PathBuf,
+    default_scenario: &str,
 ) -> std::io::Result<()> {
     use std::fs::OpenOptions;
     use std::io::Read;
@@ -193,6 +199,9 @@ fn easy_fs_pack(
         let inode = root_inode.create(case.as_str()).unwrap();
         inode.write_at(0, all_data.as_slice());
     }
+
+    let inode = root_inode.create("t2l5_default").unwrap();
+    inode.write_at(0, default_scenario.as_bytes());
 
     Ok(())
 }

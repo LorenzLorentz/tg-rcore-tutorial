@@ -31,7 +31,7 @@ runner = [
 # TG_USER_VERSION : 目标版本号
 [env]
 CHAPTER           = "10"
-T2L5_SCENARIO     = "t2l5_mutex_stress"
+T2L5_SCENARIO     = "t2l5_lab_menu"
 TG_USER_CRATE     = "wpj-tg-rcore-tutorial-user"
 TG_USER_LOCAL_DIR = "tg-rcore-tutorial-user"
 TG_USER_VERSION   = "0.0.0"

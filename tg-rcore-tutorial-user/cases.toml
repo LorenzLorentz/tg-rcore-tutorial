@@ -190,6 +190,7 @@ cases = [
     "t4l45_smp_probe",
     "t4l45_hybrid_pipeline",
     "t4l45_semaphore_ring",
+    "t4l45_matrix_smp",
 ]
 
 [ch3_exercise]
@@ -319,8 +320,12 @@ cases = [
 
 [t2l5]
 cases = [
+    "exit",
+    "user_shell",
+    "t2l5_lab_menu",
     "t2l5_spin_ticket",
     "t2l5_spin_broken",
+    "t2l5_bug_deadlock_mutex",
     "t2l5_mutex_stress",
     "t2l5_semaphore_pc",
     "t2l5_condvar_pc",

@@ -5,11 +5,11 @@
 extern crate user_lib;
 extern crate alloc;
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, format, vec::Vec};
 use core::ptr;
 use user_lib::{
-    AtomicStats, ReaderPreferRwLock, busy_spin, exit, now_us, sched_yield, sleep, thread_create,
-    waittid,
+    AtomicStats, ReaderPreferRwLock, busy_spin, exit, now_us, print_user_bug, sched_yield, sleep,
+    thread_create, waittid,
 };
 
 static READ_STATS: AtomicStats = AtomicStats::new();
@@ -98,11 +98,20 @@ pub extern "C" fn main() -> i32 {
         writer_summary.max_wait_us,
         writer_summary.starvation,
     );
-    assert_eq!(
-        writer_summary.starvation,
-        0,
-        "reader-prefer rwlock starved writer as expected"
-    );
-    println!("reader-prefer rwlock unexpectedly passed");
-    0
+    if writer_summary.starvation > 0 {
+        print_user_bug(
+            "statistical",
+            "starvation",
+            "rwlock",
+            &format!(
+                "variant=reader_prefer writer_max_wait_us={} starvation={}",
+                writer_summary.max_wait_us, writer_summary.starvation
+            ),
+        );
+        println!("reader-prefer rwlock starved writer as expected");
+        0
+    } else {
+        println!("reader-prefer rwlock unexpectedly passed");
+        1
+    }
 }

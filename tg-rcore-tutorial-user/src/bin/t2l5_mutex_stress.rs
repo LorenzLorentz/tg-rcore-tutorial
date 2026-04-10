@@ -67,7 +67,7 @@ pub extern "C" fn main() -> i32 {
     assert_eq!(counter, THREADS * ITERATIONS);
 
     println!(
-        "[t2l5-summary] primitive=mutex variant=fifo_blocking ops={} contention={} avg_wait_us={} max_wait_us={} avg_hold_us={} max_hold_us={} ctx_switches={} blocked={} wakeups={} starvation={}",
+        "[t2l5-summary] primitive=mutex variant=fifo_blocking ops={} contention={} avg_wait_us={} max_wait_us={} avg_hold_us={} max_hold_us={} ctx_switches={} blocked={} wakeups={} starvation={} bug_total={} bug_exact={} bug_heuristic={} bug_statistical={}",
         summary.acquisitions,
         summary.contentions,
         summary.avg_wait_us(),
@@ -78,6 +78,10 @@ pub extern "C" fn main() -> i32 {
         kernel.blocked_sync_ops,
         kernel.wakeups,
         summary.starvation,
+        kernel.bug_total,
+        kernel.bug_exact,
+        kernel.bug_heuristic,
+        kernel.bug_statistical,
     );
     println!("t2l5 mutex stress passed!");
     0

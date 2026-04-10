@@ -19,11 +19,15 @@
 //! - 最后看 `Schedule<ThreadId>`：明确调度粒度已经从进程切换为线程。
 
 use crate::process::{Process, Thread};
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    vec::Vec,
+};
 use core::{
     cell::UnsafeCell,
     sync::atomic::{AtomicUsize, Ordering},
 };
+use spin::Mutex as SpinMutex;
 use tg_task_manage::{Manage, PThreadManager, ProcId, Schedule, ThreadId};
 
 /// 处理器内部类型（双层管理器）
@@ -54,6 +58,12 @@ impl Processor {
 /// 全局处理器实例
 pub static PROCESSOR: Processor = Processor::new();
 
+#[derive(Clone, Copy)]
+pub enum KernelBugClass {
+    Exact,
+    Heuristic,
+}
+
 /// 内核同步实验计数器。
 pub struct KernelMetrics {
     /// 总上下文切换次数。
@@ -62,6 +72,14 @@ pub struct KernelMetrics {
     pub blocked_sync_ops: AtomicUsize,
     /// 同步原语唤醒次数。
     pub wakeups: AtomicUsize,
+    /// bug 总次数。
+    pub bug_total: AtomicUsize,
+    /// 精确型 bug 次数。
+    pub bug_exact: AtomicUsize,
+    /// 启发式 bug 次数。
+    pub bug_heuristic: AtomicUsize,
+    /// 统计型 bug 次数。
+    pub bug_statistical: AtomicUsize,
 }
 
 impl KernelMetrics {
@@ -71,6 +89,22 @@ impl KernelMetrics {
             context_switches: AtomicUsize::new(0),
             blocked_sync_ops: AtomicUsize::new(0),
             wakeups: AtomicUsize::new(0),
+            bug_total: AtomicUsize::new(0),
+            bug_exact: AtomicUsize::new(0),
+            bug_heuristic: AtomicUsize::new(0),
+            bug_statistical: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn record_bug(&self, class: KernelBugClass) {
+        self.bug_total.fetch_add(1, Ordering::Relaxed);
+        match class {
+            KernelBugClass::Exact => {
+                self.bug_exact.fetch_add(1, Ordering::Relaxed);
+            }
+            KernelBugClass::Heuristic => {
+                self.bug_heuristic.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -79,11 +113,55 @@ impl KernelMetrics {
         self.context_switches.store(0, Ordering::Relaxed);
         self.blocked_sync_ops.store(0, Ordering::Relaxed);
         self.wakeups.store(0, Ordering::Relaxed);
+        self.bug_total.store(0, Ordering::Relaxed);
+        self.bug_exact.store(0, Ordering::Relaxed);
+        self.bug_heuristic.store(0, Ordering::Relaxed);
+        self.bug_statistical.store(0, Ordering::Relaxed);
     }
 }
 
 /// 全局内核同步实验计数器。
 pub static KERNEL_METRICS: KernelMetrics = KernelMetrics::new();
+
+pub struct ActiveEntities {
+    procs: SpinMutex<BTreeSet<ProcId>>,
+    threads: SpinMutex<BTreeSet<ThreadId>>,
+}
+
+impl ActiveEntities {
+    pub const fn new() -> Self {
+        Self {
+            procs: SpinMutex::new(BTreeSet::new()),
+            threads: SpinMutex::new(BTreeSet::new()),
+        }
+    }
+
+    pub fn add_proc(&self, pid: ProcId) {
+        self.procs.lock().insert(pid);
+    }
+
+    pub fn remove_proc(&self, pid: ProcId) {
+        self.procs.lock().remove(&pid);
+    }
+
+    pub fn add_thread(&self, tid: ThreadId) {
+        self.threads.lock().insert(tid);
+    }
+
+    pub fn remove_thread(&self, tid: ThreadId) {
+        self.threads.lock().remove(&tid);
+    }
+
+    pub fn active_proc_ids(&self) -> Vec<ProcId> {
+        self.procs.lock().iter().copied().collect()
+    }
+
+    pub fn active_thread_count(&self) -> usize {
+        self.threads.lock().len()
+    }
+}
+
+pub static ACTIVE_ENTITIES: ActiveEntities = ActiveEntities::new();
 
 /// 线程管理器
 ///
@@ -111,6 +189,7 @@ impl Manage<Thread, ThreadId> for ThreadManager {
     #[inline]
     fn insert(&mut self, id: ThreadId, task: Thread) {
         self.tasks.insert(id, task);
+        ACTIVE_ENTITIES.add_thread(id);
     }
     /// 获取线程可变引用
     #[inline]
@@ -121,6 +200,7 @@ impl Manage<Thread, ThreadId> for ThreadManager {
     #[inline]
     fn delete(&mut self, id: ThreadId) {
         self.tasks.remove(&id);
+        ACTIVE_ENTITIES.remove_thread(id);
     }
 }
 
@@ -162,6 +242,7 @@ impl Manage<Process, ProcId> for ProcManager {
     #[inline]
     fn insert(&mut self, id: ProcId, item: Process) {
         self.procs.insert(id, item);
+        ACTIVE_ENTITIES.add_proc(id);
     }
     /// 获取进程可变引用
     #[inline]
@@ -172,5 +253,6 @@ impl Manage<Process, ProcId> for ProcManager {
     #[inline]
     fn delete(&mut self, id: ProcId) {
         self.procs.remove(&id);
+        ACTIVE_ENTITIES.remove_proc(id);
     }
 }

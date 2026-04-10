@@ -31,6 +31,8 @@ use alloc::{
     alloc::alloc_zeroed,
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
+    format,
+    string::String,
     sync::Arc,
     vec::Vec,
 };
@@ -142,6 +144,67 @@ impl SemaphoreDeadlockState {
         self.waiting.insert(tid, sem_id);
     }
 
+    pub fn waiting_sem(&self, tid: ThreadId) -> Option<usize> {
+        self.waiting.get(&tid).copied()
+    }
+
+    pub fn held_resources_by(&self, tid: ThreadId) -> Vec<(usize, usize)> {
+        self.allocations
+            .get(&tid)
+            .map(|held| held.iter().map(|(&sem_id, &count)| (sem_id, count)).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn waiting_entries(&self) -> Vec<(ThreadId, usize)> {
+        self.waiting
+            .iter()
+            .map(|(&tid, &sem_id)| (tid, sem_id))
+            .collect()
+    }
+
+    pub fn clear_waiting(&mut self, tid: ThreadId) {
+        self.waiting.remove(&tid);
+    }
+
+    pub fn describe_deadlock_snapshot(&self, tid: ThreadId, sem_id: usize) -> String {
+        let available = self
+            .available()
+            .iter()
+            .enumerate()
+            .map(|(id, count)| format!("S{id}:{count}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let waiting = self
+            .waiting
+            .iter()
+            .map(|(&waiting_tid, &waiting_sem)| {
+                format!("T{}->S{}", waiting_tid.get_usize(), waiting_sem)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let allocations = self
+            .allocations
+            .iter()
+            .map(|(&holder_tid, held)| {
+                let held = held
+                    .iter()
+                    .map(|(&held_sem, &count)| format!("S{held_sem}:{count}"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("T{}=[{}]", holder_tid.get_usize(), held)
+            })
+            .collect::<Vec<_>>()
+            .join(";");
+        format!(
+            "request=T{}->S{} available=[{}] waiting=[{}] allocations=[{}]",
+            tid.get_usize(),
+            sem_id,
+            available,
+            waiting,
+            allocations
+        )
+    }
+
     pub fn release(&mut self, tid: ThreadId, sem_id: usize) {
         if let Some(held) = self.allocations.get_mut(&tid) {
             if let Some(count) = held.get_mut(&sem_id) {
@@ -237,6 +300,62 @@ impl MutexDeadlockState {
         self.waiting.insert(tid, mutex_id);
     }
 
+    pub fn owner_of(&self, mutex_id: usize) -> Option<ThreadId> {
+        self.owners.get(mutex_id).copied().flatten()
+    }
+
+    pub fn held_mutexes_by(&self, tid: ThreadId) -> Vec<usize> {
+        self.owners
+            .iter()
+            .enumerate()
+            .filter_map(|(mutex_id, owner)| owner.filter(|owner| *owner == tid).map(|_| mutex_id))
+            .collect()
+    }
+
+    pub fn waiting_mutex(&self, tid: ThreadId) -> Option<usize> {
+        self.waiting.get(&tid).copied()
+    }
+
+    pub fn waiting_entries(&self) -> Vec<(ThreadId, usize)> {
+        self.waiting
+            .iter()
+            .map(|(&tid, &mutex_id)| (tid, mutex_id))
+            .collect()
+    }
+
+    pub fn clear_waiting(&mut self, tid: ThreadId) {
+        self.waiting.remove(&tid);
+    }
+
+    pub fn describe_wait_chain(&self, start_tid: ThreadId, start_mutex_id: usize) -> String {
+        let mut parts = vec![
+            format!("T{}", start_tid.get_usize()),
+            format!("M{start_mutex_id}"),
+        ];
+        let mut current_tid = start_tid;
+        let mut current_mutex = start_mutex_id;
+        let mut seen = BTreeSet::new();
+        seen.insert((current_tid, current_mutex));
+        while let Some(owner) = self.owner_of(current_mutex) {
+            parts.push(format!("T{}", owner.get_usize()));
+            if owner == start_tid {
+                break;
+            }
+            if let Some(next_mutex) = self.waiting.get(&owner).copied() {
+                parts.push(format!("M{next_mutex}"));
+                if !seen.insert((owner, next_mutex)) {
+                    break;
+                }
+                current_tid = owner;
+                current_mutex = next_mutex;
+            } else {
+                let _ = current_tid;
+                break;
+            }
+        }
+        parts.join(" -> ")
+    }
+
     pub fn unlock(&mut self, mutex_id: usize, waking_tid: Option<ThreadId>) {
         if let Some(tid) = waking_tid {
             self.waiting.remove(&tid);
@@ -245,6 +364,12 @@ impl MutexDeadlockState {
             self.owners[mutex_id] = None;
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct CondvarWaitState {
+    pub condvar_id: usize,
+    pub mutex_id: usize,
 }
 
 /// 线程（执行单元）
@@ -287,6 +412,8 @@ pub struct Process {
     pub mutex_list: Vec<Option<Arc<dyn MutexTrait>>>,
     /// 条件变量列表（**本章新增**，所有线程共享）
     pub condvar_list: Vec<Option<Arc<Condvar>>>,
+    /// 阻塞在 condvar 上的线程。
+    pub condvar_waiting: BTreeMap<ThreadId, CondvarWaitState>,
     /// 是否启用死锁检测。
     pub deadlock_detect_enabled: bool,
     /// 信号量死锁检测状态。
@@ -296,6 +423,119 @@ pub struct Process {
 }
 
 impl Process {
+    pub fn record_condvar_wait(&mut self, tid: ThreadId, condvar_id: usize, mutex_id: usize) {
+        self.condvar_waiting.insert(
+            tid,
+            CondvarWaitState {
+                condvar_id,
+                mutex_id,
+            },
+        );
+    }
+
+    pub fn clear_condvar_wait(&mut self, tid: ThreadId) {
+        self.condvar_waiting.remove(&tid);
+    }
+
+    pub fn describe_blocked_threads(&self) -> String {
+        let mut lines = Vec::new();
+        for (tid, mutex_id) in self.mutex_deadlock.waiting_entries() {
+            let owner = self
+                .mutex_deadlock
+                .owner_of(mutex_id)
+                .map(|owner| format!("T{}", owner.get_usize()))
+                .unwrap_or_else(|| "none".into());
+            lines.push(format!(
+                "T{} waiting mutex M{} owner={}",
+                tid.get_usize(),
+                mutex_id,
+                owner
+            ));
+        }
+        for (tid, sem_id) in self.semaphore_deadlock.waiting_entries() {
+            let holders = self
+                .semaphore_deadlock
+                .allocations
+                .iter()
+                .filter_map(|(&holder_tid, held)| {
+                    held.get(&sem_id)
+                        .copied()
+                        .map(|count| format!("T{}:{}", holder_tid.get_usize(), count))
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            lines.push(format!(
+                "T{} waiting semaphore S{} holders=[{}]",
+                tid.get_usize(),
+                sem_id,
+                holders
+            ));
+        }
+        for (&tid, wait_state) in &self.condvar_waiting {
+            lines.push(format!(
+                "T{} waiting condvar C{} via mutex M{}",
+                tid.get_usize(),
+                wait_state.condvar_id,
+                wait_state.mutex_id
+            ));
+        }
+        if lines.is_empty() {
+            "no_blocked_threads".into()
+        } else {
+            lines.join("; ")
+        }
+    }
+
+    pub fn describe_thread_sync_state(&self, tid: ThreadId) -> Option<String> {
+        let held_mutexes = self.mutex_deadlock.held_mutexes_by(tid);
+        let held_semaphores = self.semaphore_deadlock.held_resources_by(tid);
+        let waiting_mutex = self.mutex_deadlock.waiting_mutex(tid);
+        let waiting_sem = self.semaphore_deadlock.waiting_sem(tid);
+        let waiting_condvar = self.condvar_waiting.get(&tid).copied();
+        if held_mutexes.is_empty()
+            && held_semaphores.is_empty()
+            && waiting_mutex.is_none()
+            && waiting_sem.is_none()
+            && waiting_condvar.is_none()
+        {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if !held_mutexes.is_empty() {
+            parts.push(format!(
+                "held_mutexes=[{}]",
+                held_mutexes
+                    .iter()
+                    .map(|mutex_id| format!("M{mutex_id}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+        if !held_semaphores.is_empty() {
+            parts.push(format!(
+                "held_semaphores=[{}]",
+                held_semaphores
+                    .iter()
+                    .map(|(sem_id, count)| format!("S{sem_id}:{count}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+        if let Some(mutex_id) = waiting_mutex {
+            parts.push(format!("waiting_mutex=M{mutex_id}"));
+        }
+        if let Some(sem_id) = waiting_sem {
+            parts.push(format!("waiting_semaphore=S{sem_id}"));
+        }
+        if let Some(wait_state) = waiting_condvar {
+            parts.push(format!(
+                "waiting_condvar=C{} via M{}",
+                wait_state.condvar_id, wait_state.mutex_id
+            ));
+        }
+        Some(parts.join(" "))
+    }
+
     /// exec：替换当前进程的地址空间和主线程上下文
     ///
     /// 注意：只支持单线程进程执行 exec
@@ -349,6 +589,7 @@ impl Process {
                 semaphore_list: Vec::new(),
                 mutex_list: Vec::new(),
                 condvar_list: Vec::new(),
+                condvar_waiting: BTreeMap::new(),
                 deadlock_detect_enabled: false,
                 semaphore_deadlock: SemaphoreDeadlockState::new(),
                 mutex_deadlock: MutexDeadlockState::new(),
@@ -444,6 +685,7 @@ impl Process {
                 semaphore_list: Vec::new(),
                 mutex_list: Vec::new(),
                 condvar_list: Vec::new(),
+                condvar_waiting: BTreeMap::new(),
                 deadlock_detect_enabled: false,
                 semaphore_deadlock: SemaphoreDeadlockState::new(),
                 mutex_deadlock: MutexDeadlockState::new(),

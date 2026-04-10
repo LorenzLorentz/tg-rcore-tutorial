@@ -105,12 +105,21 @@ pub fn count_syscall(syscall_id: usize) -> isize {
 
 /// t2l4 实验使用的虚拟 tick 请求号。
 pub const LAB_TICK_REQUEST: usize = 100;
+/// t2l5 实验使用的关机请求号。
+pub const T2L5_TRACE_SHUTDOWN: usize = 0x20c;
 
 /// 主动向内核发送一个“虚拟时钟 tick”。
 ///
 /// `tg-rcore-tutorial-t2l4` 会把这个请求映射到 `Scheduler::on_tick()`。
 pub fn lab_tick() -> isize {
     trace(LAB_TICK_REQUEST, 0, 0)
+}
+
+pub fn shutdown_system() -> ! {
+    let _ = trace(T2L5_TRACE_SHUTDOWN, 0, 0);
+    loop {
+        sched_yield();
+    }
 }
 
 /// 用纯计算制造一个可重复的 CPU burst。

@@ -19,30 +19,43 @@ SUCCESS_CASES = [
 ]
 
 CONTROL_CASES = [
-    {"scenario": "t2l5_spin_broken", "timeout": 90, "expected": "timeout"},
+    {
+        "scenario": "t2l5_bug_deadlock_mutex",
+        "timeout": 90,
+        "expected": "marker",
+        "marker": "[t2l5-bug] source=kernel class=exact kind=deadlock primitive=mutex",
+    },
+    {
+        "scenario": "t2l5_spin_broken",
+        "timeout": 90,
+        "expected": "marker",
+        "marker": "[t2l5-bug] source=user class=heuristic kind=stuck_spin primitive=spinlock",
+    },
     {
         "scenario": "t2l5_mutex_stress",
         "timeout": 90,
         "fault_mode": "mutex_drop_wakeup",
-        "expected": "timeout",
+        "expected": "marker",
+        "marker": "[t2l5-bug] source=kernel class=heuristic kind=lost_wakeup primitive=mutex",
     },
     {
         "scenario": "t2l5_semaphore_pc",
         "timeout": 90,
         "fault_mode": "semaphore_drop_wakeup",
-        "expected": "timeout",
+        "expected": "marker",
+        "marker": "[t2l5-bug] source=kernel class=heuristic kind=lost_wakeup primitive=semaphore",
     },
     {
         "scenario": "t2l5_condvar_if_bug",
         "timeout": 90,
         "expected": "marker",
-        "marker": "[t2l5-control] condvar if-bug failed_threads=",
+        "marker": "[t2l5-bug] source=user class=exact kind=condvar_if_misuse primitive=condvar",
     },
     {
         "scenario": "t2l5_rwlock_reader_pref",
         "timeout": 90,
         "expected": "marker",
-        "marker": "reader-prefer rwlock starved writer as expected",
+        "marker": "[t2l5-bug] source=user class=statistical kind=starvation primitive=rwlock",
     },
 ]
 

@@ -12,6 +12,14 @@ pub const T2L5_TRACE_GET_CONTEXT_SWITCHES: usize = 0x201;
 pub const T2L5_TRACE_GET_BLOCKED_SYNC: usize = 0x202;
 /// t2l5 trace 请求：读取同步唤醒次数。
 pub const T2L5_TRACE_GET_WAKEUPS: usize = 0x203;
+/// t2l5 trace 请求：读取 bug 总数。
+pub const T2L5_TRACE_GET_BUG_TOTAL: usize = 0x208;
+/// t2l5 trace 请求：读取精确型 bug 数。
+pub const T2L5_TRACE_GET_BUG_EXACT: usize = 0x209;
+/// t2l5 trace 请求：读取启发式 bug 数。
+pub const T2L5_TRACE_GET_BUG_HEURISTIC: usize = 0x20a;
+/// t2l5 trace 请求：读取统计型 bug 数。
+pub const T2L5_TRACE_GET_BUG_STATISTICAL: usize = 0x20b;
 /// t4l45 trace 请求：读取当前 hart 编号。
 pub const T4L45_TRACE_GET_CURRENT_HART: usize = 0x204;
 
@@ -24,6 +32,14 @@ pub struct KernelMetricSnapshot {
     pub blocked_sync_ops: usize,
     /// 同步原语唤醒次数。
     pub wakeups: usize,
+    /// bug 总数。
+    pub bug_total: usize,
+    /// 精确型 bug 数。
+    pub bug_exact: usize,
+    /// 启发式 bug 数。
+    pub bug_heuristic: usize,
+    /// 统计型 bug 数。
+    pub bug_statistical: usize,
 }
 
 impl KernelMetricSnapshot {
@@ -33,6 +49,10 @@ impl KernelMetricSnapshot {
             context_switches: self.context_switches - earlier.context_switches,
             blocked_sync_ops: self.blocked_sync_ops - earlier.blocked_sync_ops,
             wakeups: self.wakeups - earlier.wakeups,
+            bug_total: self.bug_total - earlier.bug_total,
+            bug_exact: self.bug_exact - earlier.bug_exact,
+            bug_heuristic: self.bug_heuristic - earlier.bug_heuristic,
+            bug_statistical: self.bug_statistical - earlier.bug_statistical,
         }
     }
 }
@@ -302,7 +322,18 @@ pub fn kernel_metrics() -> KernelMetricSnapshot {
         context_switches: trace(T2L5_TRACE_GET_CONTEXT_SWITCHES, 0, 0) as usize,
         blocked_sync_ops: trace(T2L5_TRACE_GET_BLOCKED_SYNC, 0, 0) as usize,
         wakeups: trace(T2L5_TRACE_GET_WAKEUPS, 0, 0) as usize,
+        bug_total: trace(T2L5_TRACE_GET_BUG_TOTAL, 0, 0) as usize,
+        bug_exact: trace(T2L5_TRACE_GET_BUG_EXACT, 0, 0) as usize,
+        bug_heuristic: trace(T2L5_TRACE_GET_BUG_HEURISTIC, 0, 0) as usize,
+        bug_statistical: trace(T2L5_TRACE_GET_BUG_STATISTICAL, 0, 0) as usize,
     }
+}
+
+pub fn print_user_bug(class: &str, kind: &str, primitive: &str, details: &str) {
+    crate::println!(
+        "[t2l5-bug] source=user class={} kind={} primitive={} {}",
+        class, kind, primitive, details
+    );
 }
 
 /// 读取当前线程所在的 hart 编号。

@@ -65,9 +65,13 @@ use crate::{
     fs::{FS, read_all},
     impls::{Sv39Manager, SyscallContext},
     process::{Process, Thread},
-    processor::{KERNEL_METRICS, ProcManager, ProcessorInner, ThreadManager},
+    processor::{
+        ACTIVE_ENTITIES, KERNEL_METRICS, KernelBugClass, ProcManager, ProcessorInner,
+        ThreadManager,
+    },
 };
 use alloc::alloc::alloc;
+use alloc::vec::Vec;
 use core::{alloc::Layout, cell::UnsafeCell, mem::MaybeUninit};
 use impls::Console;
 pub use processor::PROCESSOR;
@@ -168,6 +172,16 @@ pub const T2L5_TRACE_GET_CONTEXT_SWITCHES: usize = 0x201;
 pub const T2L5_TRACE_GET_BLOCKED_SYNC: usize = 0x202;
 /// t2l5 trace 请求：读取同步唤醒次数。
 pub const T2L5_TRACE_GET_WAKEUPS: usize = 0x203;
+/// t2l5 trace 请求：读取 bug 总数。
+pub const T2L5_TRACE_GET_BUG_TOTAL: usize = 0x208;
+/// t2l5 trace 请求：读取精确型 bug 数。
+pub const T2L5_TRACE_GET_BUG_EXACT: usize = 0x209;
+/// t2l5 trace 请求：读取启发式 bug 数。
+pub const T2L5_TRACE_GET_BUG_HEURISTIC: usize = 0x20a;
+/// t2l5 trace 请求：读取统计型 bug 数。
+pub const T2L5_TRACE_GET_BUG_STATISTICAL: usize = 0x20b;
+/// t2l5 trace 请求：正常关机。
+pub const T2L5_TRACE_SHUTDOWN: usize = 0x20c;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FaultMode {
@@ -182,6 +196,83 @@ fn fault_mode() -> FaultMode {
         Some("semaphore_drop_wakeup") => FaultMode::SemaphoreDropWakeup,
         _ => FaultMode::None,
     }
+}
+
+fn bug_class_name(class: KernelBugClass) -> &'static str {
+    match class {
+        KernelBugClass::Exact => "exact",
+        KernelBugClass::Heuristic => "heuristic",
+    }
+}
+
+fn report_kernel_bug(class: KernelBugClass, kind: &str, primitive: &str, details: &str) {
+    KERNEL_METRICS.record_bug(class);
+    println!(
+        "[t2l5-bug] source=kernel class={} kind={} primitive={} {}",
+        bug_class_name(class),
+        kind,
+        primitive,
+        details
+    );
+}
+
+fn report_kernel_bug_graph(kind: &str, primitive: &str, graph: &str) {
+    println!(
+        "[t2l5-bug-graph] source=kernel kind={} primitive={} graph={}",
+        kind, primitive, graph
+    );
+}
+
+fn report_thread_exit_sync_bug(processor: &mut ProcessorInner) {
+    let tid = if let Some(current) = processor.current() {
+        current.tid
+    } else {
+        return;
+    };
+    let current_proc = if let Some(proc) = processor.get_current_proc() {
+        proc
+    } else {
+        return;
+    };
+    if let Some(state) = current_proc.describe_thread_sync_state(tid) {
+        report_kernel_bug(
+            KernelBugClass::Exact,
+            "thread_exit_with_sync_state",
+            "system",
+            &format!("tid={} {}", tid.get_usize(), state),
+        );
+    }
+}
+
+fn report_scheduler_stall(processor: &mut ProcessorInner) {
+    let active_threads = ACTIVE_ENTITIES.active_thread_count();
+    if active_threads == 0 {
+        return;
+    }
+    let mut details = Vec::new();
+    for pid in ACTIVE_ENTITIES.active_proc_ids() {
+        if let Some(proc) = processor.get_proc(pid) {
+            let blocked = proc.describe_blocked_threads();
+            if blocked != "no_blocked_threads" {
+                details.push(format!("P{}: {}", pid.get_usize(), blocked));
+            }
+        }
+    }
+    let details = if details.is_empty() {
+        format!("active_threads={} no_ready_threads", active_threads)
+    } else {
+        format!(
+            "active_threads={} blocked={}",
+            active_threads,
+            details.join(" | ")
+        )
+    };
+    report_kernel_bug(
+        KernelBugClass::Heuristic,
+        "all_threads_blocked",
+        "system",
+        &details,
+    );
 }
 
 /// 内核主函数
@@ -258,11 +349,15 @@ extern "C" fn rust_main() -> ! {
                     let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
                     match current_proc.signal.handle_signals(ctx) {
                         SignalResult::ProcessKilled(exit_code) => unsafe {
+                            report_thread_exit_sync_bug(&mut *processor);
                             (*processor).make_current_exited(exit_code as _)
                         },
                         _ => match syscall_ret {
                             Ret::Done(ret) => match id {
-                                Id::EXIT => unsafe { (*processor).make_current_exited(ret) },
+                                Id::EXIT => unsafe {
+                                    report_thread_exit_sync_bug(&mut *processor);
+                                    (*processor).make_current_exited(ret)
+                                },
                                 // ─── 本章新增：同步原语阻塞处理 ───
                                 // 当 semaphore_down / mutex_lock / condvar_wait 返回 -1 时，
                                 // 表示资源不可用，将当前线程标记为阻塞态
@@ -299,6 +394,7 @@ extern "C" fn rust_main() -> ! {
                 }
             }
         } else {
+            report_scheduler_stall(unsafe { &mut *processor });
             println!("no task");
             break;
         }
@@ -377,7 +473,9 @@ mod impls {
     use crate::{
         PROCESSOR, Sv39, Thread, build_flags,
         fs::{FS, Fd, read_all},
-        processor::ProcessorInner,
+        processor::{KernelBugClass, ProcessorInner},
+        report_kernel_bug,
+        report_kernel_bug_graph,
     };
     use alloc::sync::Arc;
     use alloc::{alloc::alloc_zeroed, string::String, vec::Vec};
@@ -718,6 +816,22 @@ mod impls {
                 crate::T2L5_TRACE_GET_WAKEUPS => {
                     crate::KERNEL_METRICS.wakeups.load(Ordering::Relaxed) as isize
                 }
+                crate::T2L5_TRACE_GET_BUG_TOTAL => {
+                    crate::KERNEL_METRICS.bug_total.load(Ordering::Relaxed) as isize
+                }
+                crate::T2L5_TRACE_GET_BUG_EXACT => {
+                    crate::KERNEL_METRICS.bug_exact.load(Ordering::Relaxed) as isize
+                }
+                crate::T2L5_TRACE_GET_BUG_HEURISTIC => {
+                    crate::KERNEL_METRICS.bug_heuristic.load(Ordering::Relaxed) as isize
+                }
+                crate::T2L5_TRACE_GET_BUG_STATISTICAL => {
+                    crate::KERNEL_METRICS.bug_statistical.load(Ordering::Relaxed) as isize
+                }
+                crate::T2L5_TRACE_SHUTDOWN => {
+                    println!("[t2l5-control] shutdown requested from user");
+                    tg_sbi::shutdown(false)
+                }
                 _ => -1,
             }
         }
@@ -949,6 +1063,13 @@ mod impls {
                     unsafe {
                         (*processor).re_enque(tid);
                     }
+                } else {
+                    report_kernel_bug(
+                        KernelBugClass::Heuristic,
+                        "lost_wakeup",
+                        "semaphore",
+                        &format!("sem_id={} waiter_tid={}", sem_id, tid.get_usize()),
+                    );
                 }
             }
             0
@@ -964,6 +1085,15 @@ mod impls {
             if current_proc.deadlock_detect_enabled
                 && current_proc.semaphore_deadlock.would_deadlock(tid, sem_id)
             {
+                let snapshot = current_proc
+                    .semaphore_deadlock
+                    .describe_deadlock_snapshot(tid, sem_id);
+                report_kernel_bug(
+                    KernelBugClass::Exact,
+                    "deadlock",
+                    "semaphore",
+                    &format!("tid={} sem_id={} {}", tid.get_usize(), sem_id, snapshot),
+                );
                 return -0xdead;
             }
             if !sem.down(tid) {
@@ -1006,12 +1136,36 @@ mod impls {
             use core::sync::atomic::Ordering;
 
             let processor: *mut ProcessorInner = PROCESSOR.get_mut() as *mut ProcessorInner;
+            let current_tid = unsafe { (*processor).current().unwrap().tid };
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
+            let owner_tid = current_proc.mutex_deadlock.owner_of(mutex_id);
+            if owner_tid != Some(current_tid) {
+                report_kernel_bug(
+                    KernelBugClass::Exact,
+                    "illegal_unlock",
+                    "mutex",
+                    &format!(
+                        "mutex_id={} tid={} owner={}",
+                        mutex_id,
+                        current_tid.get_usize(),
+                        owner_tid
+                            .map(|owner| format!("{}", owner.get_usize()))
+                            .unwrap_or_else(|| "none".into())
+                    ),
+                );
+                return -1;
+            }
             let mutex = Arc::clone(current_proc.mutex_list[mutex_id].as_ref().unwrap());
             let waking_tid = mutex.unlock();
             match waking_tid {
                 Some(tid) if crate::fault_mode() == crate::FaultMode::MutexDropWakeup => {
                     current_proc.mutex_deadlock.unlock(mutex_id, Some(tid));
+                    report_kernel_bug(
+                        KernelBugClass::Heuristic,
+                        "lost_wakeup",
+                        "mutex",
+                        &format!("mutex_id={} waiter_tid={}", mutex_id, tid.get_usize()),
+                    );
                 }
                 Some(tid) => {
                     current_proc.mutex_deadlock.unlock(mutex_id, Some(tid));
@@ -1037,6 +1191,14 @@ mod impls {
             if current_proc.deadlock_detect_enabled
                 && current_proc.mutex_deadlock.would_deadlock(tid, mutex_id)
             {
+                let graph = current_proc.mutex_deadlock.describe_wait_chain(tid, mutex_id);
+                report_kernel_bug(
+                    KernelBugClass::Exact,
+                    "deadlock",
+                    "mutex",
+                    &format!("tid={} mutex_id={}", tid.get_usize(), mutex_id),
+                );
+                report_kernel_bug_graph("deadlock", "mutex", &graph);
                 return -0xdead;
             }
             if !mutex.lock(tid) {
@@ -1077,6 +1239,7 @@ mod impls {
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let condvar = Arc::clone(current_proc.condvar_list[condvar_id].as_ref().unwrap());
             if let Some(result) = condvar.signal() {
+                current_proc.clear_condvar_wait(result.tid);
                 if result.acquired_mutex {
                     current_proc
                         .mutex_deadlock
@@ -1102,6 +1265,7 @@ mod impls {
             let current_proc = unsafe { (*processor).get_current_proc().unwrap() };
             let condvar = Arc::clone(current_proc.condvar_list[condvar_id].as_ref().unwrap());
             let mutex = Arc::clone(current_proc.mutex_list[mutex_id].as_ref().unwrap());
+            current_proc.record_condvar_wait(tid, condvar_id, mutex_id);
             let result = condvar.wait_with_mutex(tid, mutex_id, mutex);
             current_proc
                 .mutex_deadlock

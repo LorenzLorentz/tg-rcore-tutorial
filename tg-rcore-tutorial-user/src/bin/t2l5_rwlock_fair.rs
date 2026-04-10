@@ -105,7 +105,7 @@ pub extern "C" fn main() -> i32 {
     assert_eq!(write_summary.starvation, 0);
 
     println!(
-        "[t2l5-summary] primitive=rwlock variant=fair read_ops={} write_ops={} contention={} avg_wait_us={} max_wait_us={} avg_hold_us={} max_hold_us={} ctx_switches={} blocked={} wakeups={} starvation={}",
+        "[t2l5-summary] primitive=rwlock variant=fair read_ops={} write_ops={} contention={} avg_wait_us={} max_wait_us={} avg_hold_us={} max_hold_us={} ctx_switches={} blocked={} wakeups={} starvation={} bug_total={} bug_exact={} bug_heuristic={} bug_statistical={}",
         read_summary.acquisitions,
         write_summary.acquisitions,
         read_summary.contentions + write_summary.contentions,
@@ -117,6 +117,10 @@ pub extern "C" fn main() -> i32 {
         kernel.blocked_sync_ops,
         kernel.wakeups,
         write_summary.starvation,
+        kernel.bug_total,
+        kernel.bug_exact,
+        kernel.bug_heuristic,
+        kernel.bug_statistical,
     );
     println!("t2l5 fair rwlock passed!");
     0
